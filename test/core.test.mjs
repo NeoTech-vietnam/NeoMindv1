@@ -41,6 +41,7 @@ import {
   prepareContribution,
   submitContribution,
   resourceRoot,
+  recordFingerprint,
 } from '../dist/index.js';
 
 test('the worker limit prevents a fourth active assignment', (t) => {
@@ -187,6 +188,24 @@ test('stable IDs survive rename and a deleted ID is never reallocated', (t) => {
   rmSync(join(root, '.verythinker/records/renamed.md'));
   const second = createRecord(root, { type: 'requirement', title: 'Replacement' });
   assert.notEqual(first.meta.id, second.meta.id);
+});
+
+test('record mutations return the same canonical body and fingerprint as persisted Windows inputs', (t) => {
+  const root = project(t);
+  const created = createRecord(root, {
+    type: 'requirement',
+    title: 'Canonical stored contract',
+    body: '\r\n# Contract\r\nThe value is one.',
+  });
+  const loaded = getRecord(root, created.meta.id);
+  assert.equal(created.body, '# Contract\nThe value is one.\n');
+  assert.deepEqual(created, loaded);
+  assert.equal(recordFingerprint(created), recordFingerprint(loaded));
+  const updated = updateRecord(root, created.meta.id, {}, '# Revised\r\nThe value is two.\r\n\r\n');
+  const reloaded = getRecord(root, created.meta.id);
+  assert.equal(updated.body, '# Revised\nThe value is two.\n');
+  assert.deepEqual(updated, reloaded);
+  assert.equal(recordFingerprint(updated), recordFingerprint(reloaded));
 });
 
 test('duplicate IDs and malformed metadata prevent indexing', (t) => {

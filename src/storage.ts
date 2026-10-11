@@ -353,8 +353,11 @@ export function getRecord(root: string, id: string): ProjectRecord {
   if (!record) throw new Error(`Record not found: ${id}`);
   return record;
 }
+function canonicalBody(body: string): string {
+  return body.replaceAll('\r\n', '\n').trim() + '\n';
+}
 function serialize(record: ProjectRecord): string {
-  return `---\n${stringify(record.meta).trimEnd()}\n---\n${record.body.trim()}\n`;
+  return `---\n${stringify(record.meta).trimEnd()}\n---\n${canonicalBody(record.body)}`;
 }
 const prefixes: Record<string, string> = {
   requirement: 'REQ',
@@ -427,6 +430,7 @@ export function createRecord(root: string, input: CreateRecord): ProjectRecord {
         (existsSync(template) ? readFileSync(template, 'utf8') : `# ${input.title}\n`),
       path: '',
     };
+    record.body = canonicalBody(record.body);
     validateMetadata(record.meta);
     sequence[input.type] = number;
     atomicWrite(sequencePath, JSON.stringify(sequence, null, 2) + '\n');
@@ -464,6 +468,7 @@ export function updateRecord(
       updated_at: now(),
     };
     if (body !== undefined) record.body = body;
+    record.body = canonicalBody(record.body);
     validateMetadata(record.meta);
     atomicWrite(safePath(root, record.path), serialize(record));
     return record;
@@ -479,6 +484,7 @@ export function saveStatus(
     precondition?.();
     const record = getRecord(root, id);
     record.meta = { ...record.meta, status, revision: record.meta.revision + 1, updated_at: now() };
+    record.body = canonicalBody(record.body);
     atomicWrite(safePath(root, record.path), serialize(record));
     return record;
   });
