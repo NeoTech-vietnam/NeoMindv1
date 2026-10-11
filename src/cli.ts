@@ -81,7 +81,7 @@ Usage: verythinker <command> [action] [id] [options]
   mcp
   native run --data JSON | native status [ID] | native wait|interrupt|resume ID
   archive prepare WORKFLOW_ID | archive publish|status SNAPSHOT_ID | archive restore ID --destination DIRECTORY | archive reassess WORKFLOW_ID --data JSON
-  note create --data JSON | note validate ID
+  note create --data JSON | note revise ID --data JSON | note validate ID
   recipe list|resolve ID|prepare --data JSON|run ID|revise ID --data JSON
   capability describe ROLE|resolve --data JSON|invoke --data JSON
   codegraph enable --report FILE --executable FILE --args JSON

@@ -75,6 +75,7 @@ import {
 } from './archives.js';
 import {
   createCornellNote,
+  reviseCornellNote,
   validateCornellNote,
   cornellKinds,
   type CornellInput,
@@ -1300,9 +1301,35 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
   tool(
     'note_create',
     'Create Cornell documentation with one {note: {...}} envelope. Supply note.path for task-bound work and practice.exercise_path/answer_path; commands are argument arrays. Expected results and observed evidence remain separate.',
-    { note: cornellNoteSchema },
+    {
+      note: cornellNoteSchema,
+      revision_id: z
+        .string()
+        .optional()
+        .describe(
+          'Existing draft Cornell record ID for an owned fixed-path repair; omit for creation.',
+        ),
+      expected_revision: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Required with revision_id; read the current record revision before repair.'),
+      revision_reason: z
+        .string()
+        .optional()
+        .describe(
+          'Required substantive repair rationale with revision_id; prior bytes/native authorship remain immutable history.',
+        ),
+    },
     (i) => {
       const receipt = bound();
+      if (i.revision_id) {
+        const existing = scopedRecord(root, receipt, i.revision_id);
+        if (receipt?.task_id && existing.meta.data.task_id !== receipt.task_id)
+          throw new Error('Cornell revision belongs to a different assigned task.');
+      } else if (i.expected_revision !== undefined || i.revision_reason !== undefined)
+        throw new Error('Cornell revision fields require revision_id.');
       assertTaskOutputPaths(root, receipt, [
         i.note.path,
         i.note.practice?.exercise_path,
@@ -1318,19 +1345,47 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
         ),
       ])
         scopedRecord(root, receipt, id);
-      const note = createCornellNote(root, {
+      if (receipt)
+        for (const source of i.note.sources)
+          if (!source.record_id && !/^https:\/\//.test(source.uri))
+            projectRead(root, { path: source.uri, max_chars: 128 }, receipt);
+      const input = {
         ...i.note,
         ...(receipt ? { owner: receipt.role } : {}),
-      } as CornellInput);
-      return receipt
-        ? updateRecord(root, note.meta.id, {
-            data: authoredData(receipt, note.meta.data),
-            links: [
-              ...note.meta.links,
-              ...(receipt.task_id ? [{ type: 'documents' as const, target: receipt.task_id }] : []),
-            ],
-          })
-        : note;
+      } as CornellInput;
+      const note = i.revision_id
+        ? reviseCornellNote(root, i.revision_id, input, i.expected_revision, i.revision_reason)
+        : createCornellNote(root, input);
+      if (!receipt) return note;
+      const attribution = authoredData(receipt);
+      const links = [
+        ...note.meta.links,
+        ...(receipt.task_id &&
+        !note.meta.links.some(
+          (link) => link.type === 'documents' && link.target === receipt.task_id,
+        )
+          ? [{ type: 'documents' as const, target: receipt.task_id }]
+          : []),
+      ];
+      if (
+        Object.entries(attribution).every(
+          ([key, value]) => JSON.stringify(note.meta.data[key]) === JSON.stringify(value),
+        ) &&
+        links.length === note.meta.links.length
+      )
+        return note;
+      return updateRecord(
+        root,
+        note.meta.id,
+        { data: attribution, links },
+        undefined,
+        (current) => {
+          if (current.meta.revision !== note.meta.revision)
+            throw new Error(
+              'Cornell note changed before native attribution; read it before retrying.',
+            );
+        },
+      );
     },
     false,
   );

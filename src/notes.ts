@@ -10,6 +10,8 @@ import {
   readConfig,
   safePath,
   snapshotPaths,
+  updateRecord,
+  withLock,
   withOperationLock,
 } from './storage.js';
 import type { ProjectRecord } from './types.js';
@@ -75,6 +77,113 @@ export interface CornellInput {
     regression: string;
   };
 }
+interface CornellRevision {
+  id: string;
+  expected_revision: number;
+  reason: string;
+}
+interface CornellHistory {
+  revision: number;
+  reason: string;
+  request_hash: string;
+  record_path: string;
+  record_hash: string;
+  intent_path: string;
+  intent_hash: string;
+  artifacts: Record<string, { history_path: string; sha256: string }>;
+}
+function historyProblems(root: string, note: ProjectRecord): string[] {
+  const history = note.meta.data.revision_history;
+  if (history === undefined) return [];
+  if (!Array.isArray(history)) return ['Cornell revision history is malformed.'];
+  const problems: string[] = [];
+  for (const item of history as CornellHistory[]) {
+    try {
+      if (
+        !Number.isSafeInteger(item.revision) ||
+        item.revision < 1 ||
+        !/^[a-f0-9]{64}$/.test(item.record_hash)
+      )
+        throw new Error('Invalid history identity.');
+      const base = `.verythinker/evidence/cornell-history/${note.meta.id}/${item.revision}-${item.record_hash}`;
+      const expected = {
+        [`${base}/record.md`]: item.record_hash,
+        [`${base}/intent.json`]: item.intent_hash,
+      };
+      if (item.record_path !== `${base}/record.md` || item.intent_path !== `${base}/intent.json`)
+        throw new Error('History escapes its immutable note namespace.');
+      for (const [source, artifact] of Object.entries(item.artifacts)) {
+        contentPath(root, source);
+        if (artifact.history_path !== `${base}/artifacts/${source}`)
+          throw new Error('History artifact path differs from its original path.');
+        expected[artifact.history_path] = artifact.sha256;
+      }
+      for (const [path, digest] of Object.entries(expected)) {
+        if (
+          !Array.isArray(note.meta.data.output_paths) ||
+          !note.meta.data.output_paths.includes(path)
+        )
+          throw new Error('Immutable history lacks its exact export reference.');
+        if (!/^[a-f0-9]{64}$/.test(digest) || hash(readFileSync(safePath(root, path))) !== digest)
+          throw new Error(`Immutable history bytes are missing or changed: ${path}`);
+      }
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return problems;
+}
+function revisionSafety(root: string, note: ProjectRecord, paths: string[]): void {
+  if (
+    note.meta.type !== 'knowledge' ||
+    note.meta.data.format !== 'cornell-v1' ||
+    note.meta.status !== 'draft'
+  )
+    throw new Error(
+      'Only a draft Cornell note can be revised; accepted and superseded history stays frozen.',
+    );
+  const history = historyProblems(root, note);
+  if (history.length) throw new Error(history.join('\n'));
+  const covers = (reference: unknown, path: string) =>
+    typeof reference === 'string' && (path === reference || path.startsWith(`${reference}/`));
+  for (const record of loadRecords(root)) {
+    const data = record.meta.data;
+    const protectedPaths = [
+      'protected_paths',
+      'protected_acceptance_paths',
+      'oracle_paths',
+    ].flatMap((key) => (Array.isArray(data[key]) ? (data[key] as unknown[]) : []));
+    for (const key of ['protected_files', 'protected_file_hashes'])
+      if (data[key] && typeof data[key] === 'object')
+        protectedPaths.push(...Object.keys(data[key] as object));
+    if (paths.some((path) => protectedPaths.some((reference) => covers(reference, path))))
+      throw new Error('Cornell revision cannot replace a protected acceptance artifact.');
+    if (
+      record.meta.id !== note.meta.id &&
+      data.format === 'cornell-v1' &&
+      record.meta.status !== 'superseded' &&
+      data.artifact_hashes &&
+      paths.some((path) => Object.hasOwn(data.artifact_hashes as object, path))
+    )
+      throw new Error('Another Cornell record owns a revision output.');
+    if (record.meta.type === 'task' && record.meta.status === 'accepted') {
+      const submission = data.submission as Record<string, unknown> | undefined;
+      const snapshot = submission?.documentation_snapshot;
+      const ownsDocument = (path: string) =>
+        snapshot && typeof snapshot === 'object'
+          ? Object.hasOwn(snapshot, path)
+          : Array.isArray(data.documentation_paths) &&
+            data.documentation_paths.some((reference) => covers(reference, path));
+      if (
+        record.meta.id === note.meta.data.task_id ||
+        note.meta.links.some((link) => link.target === record.meta.id) ||
+        record.meta.links.some((link) => link.target === note.meta.id) ||
+        paths.some(ownsDocument)
+      )
+        throw new Error('Cornell revision cannot change an accepted task deliverable.');
+    }
+  }
+}
 function text(value: unknown, label: string): asserts value is string {
   if (
     typeof value !== 'string' ||
@@ -82,6 +191,49 @@ function text(value: unknown, label: string): asserts value is string {
     /\b(?:TODO|TBD|insert here|fill in|placeholder)\b/i.test(value)
   )
     throw new Error(`${label} needs substantive content without placeholders.`);
+}
+/** Learner code may be unfinished; the instructions around it must be complete. */
+function practiceExercise(value: unknown, path: string): asserts value is string {
+  if (typeof value !== 'string') text(value, 'Practice exercise');
+  if (
+    /\.(?:[cm]?[jt]sx?|c|h|cc|hh|cpp|hpp|cxx|hxx|py|ps1|sh|bash|rs|go|java|v|sv|ino)$/i.test(path)
+  ) {
+    const instructions = value.split(/\r?\n/).flatMap((line) => {
+      const comment = /^\s*(?:\/\/|#|\/\*|\*(?!\/))(.*)$/.exec(line);
+      const instruction = comment?.[1];
+      if (instruction === undefined || /^\s*TODO\s*[:=]/i.test(instruction)) return [];
+      return [instruction.replace(/\*\/\s*$/, '')];
+    });
+    text(instructions.join('\n'), 'Practice exercise instructions');
+    return;
+  }
+  const prose: string[] = [];
+  let fence: { marker: string; width: number } | undefined;
+  for (const line of value.split(/\r?\n/)) {
+    if (fence) {
+      const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const marker = closing?.[1];
+      if (marker && marker.charAt(0) === fence.marker && marker.length >= fence.width)
+        fence = undefined;
+      continue;
+    }
+    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const marker = opening?.[1];
+    if (marker && !(marker.charAt(0) === '`' && opening?.[2]?.includes('`'))) {
+      fence = { marker: marker.charAt(0), width: marker.length };
+      continue;
+    }
+    prose.push(line);
+  }
+  if (fence) throw new Error('Practice exercise needs a closed Markdown code fence.');
+  const outsideCode = prose.join('\n').replace(/(?<![\\`])(`+)(?!`)([^`\r\n]*?)\1(?!`)/g, ' ');
+  text(outsideCode, 'Practice exercise instructions');
+  // Heading text alone is not an instructional explanation of the exercise.
+  const instructions = outsideCode
+    .split('\n')
+    .filter((line) => !/^ {0,3}#{1,6}(?:\s|$)/.test(line))
+    .join('\n');
+  text(instructions, 'Practice exercise instructions');
 }
 function contentPath(root: string, path: string): string {
   if (!path || path.includes('\\'))
@@ -251,6 +403,31 @@ function linkProblems(
 }
 /** Create visible narrative once; managed knowledge holds references and provenance only. */
 export function createCornellNote(root: string, input: CornellInput): ProjectRecord {
+  return writeCornellNote(root, input);
+}
+export function reviseCornellNote(
+  root: string,
+  id: string,
+  input: CornellInput,
+  expectedRevision: number,
+  reason: string,
+): ProjectRecord {
+  if (
+    !Number.isSafeInteger(expectedRevision) ||
+    expectedRevision < 1 ||
+    typeof reason !== 'string' ||
+    reason.trim().length < 24
+  )
+    throw new Error(
+      'Cornell revision requires the expected record revision and a substantive rationale.',
+    );
+  return writeCornellNote(root, input, { id, expected_revision: expectedRevision, reason });
+}
+function writeCornellNote(
+  root: string,
+  input: CornellInput,
+  revision?: CornellRevision,
+): ProjectRecord {
   readConfig(root);
   if (!cornellKinds.includes(input.kind)) throw new Error('Unsupported Cornell note kind.');
   text(input.topic, 'Topic');
@@ -276,7 +453,7 @@ export function createCornellNote(root: string, input: CornellInput): ProjectRec
     throw new Error('Main notes must cite the source ledger using [S1] references.');
   text(input.demonstration.body, 'Demonstration');
   text(input.demonstration.expected, 'Expected result');
-  text(input.practice.exercise, 'Practice exercise');
+  practiceExercise(input.practice.exercise, input.practice.exercise_path);
   text(input.practice.answer, 'Practice answer');
   if (!input.practice.command)
     throw new Error('Practice needs an explicit runnable argument vector.');
@@ -367,14 +544,15 @@ export function createCornellNote(root: string, input: CornellInput): ProjectRec
   const citationErrors = sourceLinks(body, sources);
   if (citationErrors.length) throw new Error(citationErrors.join(' '));
   return withOperationLock(root, `cornell-${hash(path).slice(0, 32)}`, () => {
-    for (const target of [path, exercisePath, answerPath])
-      if (existsSync(safePath(root, target)))
-        throw new Error(`Preserve existing artifact; choose a new path: ${target}`);
+    if (!revision)
+      for (const target of [path, exercisePath, answerPath])
+        if (existsSync(safePath(root, target)))
+          throw new Error(`Preserve existing artifact; choose a new path: ${target}`);
     const proposed = {
       [path]: body,
       [exercisePath]: input.practice.exercise,
       [answerPath]: input.practice.answer,
-      ...(solutionPath && !existsSync(safePath(root, solutionPath))
+      ...(!revision && solutionPath && !existsSync(safePath(root, solutionPath))
         ? {
             [solutionPath]:
               input.practice.starter ??
@@ -389,6 +567,168 @@ export function createCornellNote(root: string, input: CornellInput): ProjectRec
       [exercisePath]: hash(input.practice.exercise),
       [answerPath]: hash(input.practice.answer),
     };
+    const data = {
+      kind: input.kind,
+      format: 'cornell-v1',
+      artifact_path: path,
+      artifact_hashes: artifacts,
+      sources,
+      demonstration: input.demonstration,
+      practice: {
+        exercise_path: exercisePath,
+        answer_path: answerPath,
+        solution_path: solutionPath,
+        command: input.practice.command ?? null,
+      },
+      source_review: 'structural-only',
+    };
+    const recordBody = `# ${input.topic}\n\nAuthoritative Cornell narrative: ${path}.\nThis record stores artifact hashes, source provenance, and engineering links. Content quality requires independent review.\n`;
+    if (revision) {
+      const existing = getRecord(root, revision.id);
+      const oldPractice = existing.meta.data.practice as Record<string, unknown>;
+      if (
+        existing.meta.data.artifact_path !== path ||
+        oldPractice?.exercise_path !== exercisePath ||
+        oldPractice?.answer_path !== answerPath ||
+        (oldPractice?.solution_path ?? null) !== solutionPath
+      )
+        throw new Error(
+          'Draft Cornell revision must retain its note, practice, answer, and solution paths.',
+        );
+      const requestHash = hash(
+        JSON.stringify({
+          body,
+          data,
+          owner: input.owner ?? existing.meta.owner,
+          reason: revision.reason,
+        }),
+      );
+      const previous = (existing.meta.data.revision_history as CornellHistory[] | undefined)?.find(
+        (item) => item.revision === revision.expected_revision && item.request_hash === requestHash,
+      );
+      if (existing.meta.revision !== revision.expected_revision && previous)
+        return withLock(root, () => {
+          const current = getRecord(root, revision.id);
+          revisionSafety(root, current, Object.keys(artifacts));
+          if (
+            Object.entries(data).some(
+              ([key, value]) => JSON.stringify(current.meta.data[key]) !== JSON.stringify(value),
+            ) ||
+            Object.entries(artifacts).some(
+              ([file, checksum]) => hash(readFileSync(safePath(root, file))) !== checksum,
+            )
+          )
+            throw new Error('Completed Cornell revision replay differs from current owned bytes.');
+          return current;
+        });
+      const patch: Parameters<typeof updateRecord>[2] = {
+        title: input.topic,
+        owner: input.owner ?? existing.meta.owner,
+        links: [...existing.meta.links, ...links].filter(
+          (link, index, all) =>
+            all.findIndex((other) => other.type === link.type && other.target === link.target) ===
+            index,
+        ),
+        data: { ...data, invocation_id: null, author_invocation_id: null, invocation_role: null },
+      };
+      return updateRecord(root, revision.id, patch, recordBody, (current) => {
+        if (current.meta.revision !== revision.expected_revision)
+          throw new Error('Cornell revision is stale; read the current note before repair.');
+        revisionSafety(root, current, Object.keys(artifacts));
+        const raw = readFileSync(safePath(root, current.path));
+        const base = `.verythinker/evidence/cornell-history/${current.meta.id}/${current.meta.revision}-${hash(raw)}`;
+        const intentPath = `${base}/intent.json`;
+        const oldHashes = current.meta.data.artifact_hashes as Record<string, string>;
+        if (
+          !oldHashes ||
+          Object.keys(oldHashes).length !== 3 ||
+          Object.keys(artifacts).some((file) => typeof oldHashes[file] !== 'string')
+        )
+          throw new Error('Draft Cornell revision requires all three recorded artifact hashes.');
+        const intent =
+          JSON.stringify(
+            {
+              schema_version: 1,
+              note_id: current.meta.id,
+              expected_revision: current.meta.revision,
+              record_hash: hash(raw),
+              request_hash: requestHash,
+              old_hashes: oldHashes,
+              new_hashes: artifacts,
+            },
+            null,
+            2,
+          ) + '\n';
+        const resume = existsSync(safePath(root, intentPath));
+        if (resume && readFileSync(safePath(root, intentPath), 'utf8') !== intent)
+          throw new Error('A conflicting Cornell revision intent already owns these files.');
+        for (const [file, oldHash] of Object.entries(oldHashes)) {
+          if (!existsSync(safePath(root, file)))
+            throw new Error(`Preserve missing Cornell artifact: ${file}`);
+          const currentHash = hash(readFileSync(safePath(root, file)));
+          if (currentHash !== oldHash && !(resume && currentHash === artifacts[file]))
+            throw new Error(`Preserve user-edited or missing Cornell artifact: ${file}`);
+        }
+        const historyArtifacts: CornellHistory['artifacts'] = {};
+        const saveHistory = (file: string, bytes: string | Buffer) => {
+          if (existsSync(safePath(root, file))) {
+            if (hash(readFileSync(safePath(root, file))) !== hash(bytes))
+              throw new Error('Immutable Cornell history was changed.');
+          } else atomicWrite(safePath(root, file), bytes);
+        };
+        saveHistory(`${base}/record.md`, raw);
+        for (const [file, checksum] of Object.entries(oldHashes)) {
+          const historyPath = `${base}/artifacts/${file}`;
+          const bytes = resume
+            ? readFileSync(safePath(root, historyPath))
+            : readFileSync(safePath(root, file));
+          if (hash(bytes) !== checksum)
+            throw new Error('Cornell original artifact history differs from its recorded hash.');
+          saveHistory(historyPath, bytes);
+          historyArtifacts[file] = { history_path: historyPath, sha256: checksum };
+        }
+        saveHistory(intentPath, intent);
+        const entry: CornellHistory = {
+          revision: current.meta.revision,
+          reason: revision.reason,
+          request_hash: requestHash,
+          record_path: `${base}/record.md`,
+          record_hash: hash(raw),
+          intent_path: intentPath,
+          intent_hash: hash(intent),
+          artifacts: historyArtifacts,
+        };
+        patch.data = {
+          ...patch.data,
+          revision_history: [
+            ...((current.meta.data.revision_history as CornellHistory[]) ?? []),
+            entry,
+          ],
+          output_paths: [
+            ...new Set([
+              ...(Array.isArray(current.meta.data.output_paths)
+                ? (current.meta.data.output_paths as string[])
+                : []),
+              entry.record_path,
+              intentPath,
+              ...Object.values(historyArtifacts).map((artifact) => artifact.history_path),
+            ]),
+          ],
+          prior_invocation_ids: [
+            ...new Set([
+              ...(Array.isArray(current.meta.data.prior_invocation_ids)
+                ? (current.meta.data.prior_invocation_ids as string[])
+                : []),
+              ...(typeof current.meta.data.invocation_id === 'string'
+                ? [current.meta.data.invocation_id]
+                : []),
+            ]),
+          ],
+        };
+        for (const [file, content] of Object.entries(proposed))
+          atomicWrite(safePath(root, file), content);
+      });
+    }
     atomicWrite(safePath(root, exercisePath), input.practice.exercise);
     atomicWrite(safePath(root, answerPath), input.practice.answer);
     if (solutionPath && !existsSync(safePath(root, solutionPath)))
@@ -404,22 +744,8 @@ export function createCornellNote(root: string, input: CornellInput): ProjectRec
       owner: input.owner ?? 'curator',
       status: 'draft',
       links,
-      data: {
-        kind: input.kind,
-        format: 'cornell-v1',
-        artifact_path: path,
-        artifact_hashes: artifacts,
-        sources,
-        demonstration: input.demonstration,
-        practice: {
-          exercise_path: exercisePath,
-          answer_path: answerPath,
-          solution_path: solutionPath,
-          command: input.practice.command ?? null,
-        },
-        source_review: 'structural-only',
-      },
-      body: `# ${input.topic}\n\nAuthoritative Cornell narrative: ${path}.\nThis record stores artifact hashes, source provenance, and engineering links. Content quality requires independent review.\n`,
+      data,
+      body: recordBody,
     });
   });
 }
@@ -432,6 +758,7 @@ export function validateCornellNote(
   if (record.meta.type !== 'knowledge' || record.meta.data.format !== 'cornell-v1')
     throw new Error('Expected a Cornell knowledge record.');
   const data = record.meta.data;
+  problems.push(...historyProblems(root, record));
   const artifacts = data.artifact_hashes as Record<string, string> | undefined;
   const path = data.artifact_path as string;
   if (!artifacts || typeof path !== 'string')

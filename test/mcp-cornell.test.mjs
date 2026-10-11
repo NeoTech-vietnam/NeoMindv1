@@ -85,6 +85,8 @@ test('Cornell MCP discovery exposes paths, source ledger, commands, and diagnost
   const { client } = await legacyClient(t);
   const tool = (await client.listTools()).tools.find((item) => item.name === 'note_create');
   assert.ok(tool);
+  assert.equal(tool.inputSchema.properties.revision_id.type, 'string');
+  assert.equal(tool.inputSchema.properties.expected_revision.type, 'integer');
   assert.deepEqual(tool.inputSchema.required, ['note']);
   const note = tool.inputSchema.properties.note;
   assert.equal(note.type, 'object');
@@ -170,6 +172,24 @@ test('typed Cornell envelope creates valid artifacts and rejects malformed neste
     readFileSync(join(root, 'docs/knowledge/answer.md'), 'utf8'),
     /has not been executed/,
   );
+  const corrected = noteInput();
+  corrected.practice.exercise +=
+    '\nComplete the independent assertion in the learner scaffold.\n```js\n// TODO: add the required numeric comparison.\n```\n';
+  const revision = await client.callTool({
+    name: 'note_create',
+    arguments: {
+      note: corrected,
+      revision_id: record.meta.id,
+      expected_revision: record.meta.revision,
+      revision_reason:
+        'Restore the intentional reviewed practice scaffold at the existing assigned artifact paths.',
+    },
+  });
+  assert.notEqual(revision.isError, true);
+  const revised = JSON.parse(revision.content[0].text);
+  assert.equal(revised.meta.id, record.meta.id);
+  assert.equal(revised.meta.data.revision_history.length, 1);
+  assert.equal(readFileSync(join(root, 'docs/practice/my-answer.mjs'), 'utf8'), authored);
 });
 
 test('Cornell schema preserves the existing explicit task output boundary', async (t) => {

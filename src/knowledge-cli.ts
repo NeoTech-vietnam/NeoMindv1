@@ -1,4 +1,9 @@
-import { createCornellNote, validateCornellNote, type CornellInput } from './notes.js';
+import {
+  createCornellNote,
+  reviseCornellNote,
+  validateCornellNote,
+  type CornellInput,
+} from './notes.js';
 import {
   listRecipes,
   prepareRecipe,
@@ -23,7 +28,20 @@ export async function dispatchKnowledgeCommand(
       return { handled: true, result: createCornellNote(root, data as unknown as CornellInput) };
     if (command === 'validate' && id)
       return { handled: true, result: validateCornellNote(root, id) };
-    throw new Error('Use note create --data JSON or note validate KNOWLEDGE_ID.');
+    if (command === 'revise' && id)
+      return {
+        handled: true,
+        result: reviseCornellNote(
+          root,
+          id,
+          data.note as CornellInput,
+          Number(data.expected_revision),
+          String(data.revision_reason ?? ''),
+        ),
+      };
+    throw new Error(
+      'Use note create --data JSON, note revise ID --data JSON, or note validate KNOWLEDGE_ID.',
+    );
   }
   if (group === 'recipe') {
     if (command === 'list') return { handled: true, result: listRecipes() };
