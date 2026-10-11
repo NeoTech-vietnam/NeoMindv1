@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, relative } from 'node:path';
 import {
@@ -19,16 +19,112 @@ import {
 } from './storage.js';
 import { ensureIndex } from './indexing.js';
 import { listPacks } from './packs.js';
+import { assertRouting, readInvocation, readRoutingPolicy, routingProblems } from './routing.js';
+import { noteFreshnessProblems } from './notes.js';
+import { verifyFrozenRecipe } from './recipes.js';
+import { toolLockProblems } from './tools.js';
+import {
+  captureEvidenceInputs,
+  validateEvidenceInputs,
+  evidenceRecordFingerprint,
+  type EvidenceInputSnapshot,
+} from './evidence-inputs.js';
 import type { Finding, Gate, ProjectRecord, Verification } from './types.js';
 
 export const strings = (value: unknown): string[] =>
   Array.isArray(value) && value.every((v) => typeof v === 'string') ? value : [];
+export function strictRecord(
+  root: string,
+  record: ProjectRecord,
+  visited = new Set<string>(),
+): boolean {
+  if (record.meta.data.routing_required === true) return true;
+  if (!existsSync(safePath(root, '.verythinker/routing.json'))) return false;
+  const byId = new Map(loadRecords(root).map((item) => [item.meta.id, item]));
+  function walk(item: ProjectRecord): boolean {
+    if (visited.has(item.meta.id)) return false;
+    visited.add(item.meta.id);
+    if (item.meta.data.routing_required === true) return true;
+    return [
+      item.meta.data.workflow_id,
+      item.meta.data.intake_workflow_id,
+      ...item.meta.links.map((link) => link.target),
+    ].some((id) => typeof id === 'string' && byId.has(id) && walk(byId.get(id)!));
+  }
+  return walk(record);
+}
+function strictExecution(root: string, record: ProjectRecord): boolean {
+  return strictRecord(root, record) || readRoutingPolicy(root) !== null;
+}
+function invocationBinding(record: ProjectRecord): { workflow_id?: string; task_id?: string } {
+  const workflow = record.meta.data.workflow_id ?? record.meta.data.intake_workflow_id;
+  return {
+    ...(typeof workflow === 'string' ? { workflow_id: workflow } : {}),
+    ...(record.meta.type === 'task' ? { task_id: record.meta.id } : {}),
+  };
+}
+function authoredRoutingProblems(
+  root: string,
+  record: ProjectRecord,
+  workflowId?: string,
+): string[] {
+  const expected: Record<string, string[]> = {
+    requirement: ['requirements'],
+    design: ['architect', 'component-owner'],
+    check: ['verifier'],
+  };
+  if (!expected[record.meta.type]) return [];
+  const id = record.meta.data.invocation_id;
+  if (typeof id !== 'string') return [`${record.meta.id} has no confirmed native author.`];
+  try {
+    const receipt = readInvocation(root, id);
+    if (!expected[record.meta.type]!.includes(receipt.role))
+      return [`${record.meta.id} was not authored by the required Sol role.`];
+    return routingProblems(root, receipt.role, id, {
+      ...invocationBinding(record),
+      ...(workflowId ? { workflow_id: workflowId } : {}),
+    }).map((problem) => `${record.meta.id}: ${problem}`);
+  } catch (error) {
+    return [`${record.meta.id}: ${String(error)}`];
+  }
+}
 function workerInvocations(record: ProjectRecord): string[] {
   const current = record.meta.data.invocation_id;
   return [
     ...strings(record.meta.data.prior_invocation_ids),
     ...(typeof current === 'string' ? [current] : []),
   ];
+}
+function escalationProblems(root: string, task: ProjectRecord): string[] {
+  const attempts = Number(task.meta.data.attempts ?? 0);
+  if (attempts <= readConfig(root).repair_attempts && task.meta.data.escalation_required !== true)
+    return [];
+  const errors: string[] = [];
+  const reason = task.meta.data.escalation_reason;
+  if (typeof reason !== 'string' || reason.trim().length < 24)
+    errors.push('Repeated failure requires substantive Sol diagnosis and reassessment.');
+  if (
+    task.meta.data.escalation_attempt !== attempts ||
+    task.meta.data.escalation_feedback_sha256 !== hash(String(task.meta.data.feedback ?? ''))
+  )
+    errors.push('Sol reassessment must cover the current repair attempt and feedback.');
+  const id = task.meta.data.escalation_invocation_id;
+  if (typeof id !== 'string')
+    return [...errors, 'Repeated failure needs a confirmed Sol reassessment receipt.'];
+  try {
+    const receipt = readInvocation(root, id);
+    if (!['manager', 'architect', 'component-owner'].includes(receipt.role))
+      errors.push('Only a Sol coordinator or designer can diagnose repeated failure.');
+    else errors.push(...routingProblems(root, receipt.role, id, invocationBinding(task)));
+    if (
+      typeof task.meta.data.repair_requested_at === 'string' &&
+      Date.parse(receipt.updated_at) < Date.parse(task.meta.data.repair_requested_at)
+    )
+      errors.push('Sol reassessment predates the latest repair request.');
+  } catch (error) {
+    errors.push(`Sol reassessment receipt cannot be verified: ${String(error)}`);
+  }
+  return errors;
 }
 const workRecordSections = [
   'Objective',
@@ -190,17 +286,7 @@ function documentationProblems(
   return errors;
 }
 export function recordFingerprint(record: ProjectRecord): string {
-  const { submission, requested_model, confirmed_model, attempts, ...data } = record.meta.data;
-  return hash(
-    JSON.stringify({
-      type: record.meta.type,
-      title: record.meta.title,
-      owner: record.meta.owner,
-      links: record.meta.links,
-      data,
-      body: record.body,
-    }),
-  );
+  return evidenceRecordFingerprint(record);
 }
 export function requirementsFor(task: ProjectRecord): string[] {
   return [
@@ -364,6 +450,7 @@ function verificationScope(records: ProjectRecord[], record: ProjectRecord): str
   for (const r of records)
     if (
       r.meta.type === 'design' &&
+      r.meta.status !== 'superseded' &&
       r.meta.links.some((l) => l.type === 'satisfies' && ids.has(l.target))
     )
       ids.add(r.meta.id);
@@ -378,6 +465,26 @@ function evidenceProblems(
 ): string[] {
   const d = evidence.meta.data;
   const errors: string[] = [];
+  if (d.input_snapshot) {
+    try {
+      validateEvidenceInputs(root, d.input_snapshot as EvidenceInputSnapshot, {
+        files: d.file_baseline as Record<string, string>,
+        record_fingerprints: d.record_baseline as Record<string, string>,
+        check_id: check.meta.id,
+        check_fingerprint: String(d.check_fingerprint),
+      });
+    } catch (error) {
+      errors.push(`Verification input snapshot is invalid: ${String(error)}`);
+    }
+  } else if (strictRecord(root, task) || strictRecord(root, evidence))
+    errors.push(
+      'Strict verification evidence needs immutable input capture; rerun the prescribed check.',
+    );
+  if (strictRecord(root, task) || strictRecord(root, evidence)) {
+    const invocation =
+      typeof d.execution_invocation_id === 'string' ? d.execution_invocation_id : undefined;
+    errors.push(...routingProblems(root, 'check-executor', invocation, invocationBinding(task)));
+  }
   if (d.result !== 'pass') errors.push('Evidence result is not pass.');
   if (d.task_id !== task.meta.id) errors.push('Evidence was collected for another task.');
   if (d.check_fingerprint !== recordFingerprint(check))
@@ -385,6 +492,11 @@ function evidenceProblems(
   const packLock = safePath(root, '.verythinker/pack-lock.json');
   if (d.pack_lock_hash !== (existsSync(packLock) ? hash(readFileSync(packLock)) : null))
     errors.push('Knowledge-pack baseline changed.');
+  if (strictRecord(root, task) || strictRecord(root, evidence)) {
+    const toolLock = safePath(root, '.verythinker/tool-lock.json');
+    if (d.tool_lock_hash !== (existsSync(toolLock) ? hash(readFileSync(toolLock)) : null))
+      errors.push('Verification tool baseline changed.');
+  }
   if (!d.record_baseline || typeof d.record_baseline !== 'object')
     errors.push('Evidence has no record baseline.');
   else
@@ -448,6 +560,8 @@ function evidenceProblems(
         receipt.check_fingerprint !== d.check_fingerprint ||
         receipt.result !== d.result ||
         receipt.log_hash !== d.log_hash ||
+        receipt.execution_invocation_id !== d.execution_invocation_id ||
+        JSON.stringify(receipt.input_snapshot) !== JSON.stringify(d.input_snapshot) ||
         JSON.stringify(receipt.record_baseline) !== JSON.stringify(d.record_baseline) ||
         JSON.stringify(receipt.file_baseline) !== JSON.stringify(d.file_baseline)
       )
@@ -460,6 +574,21 @@ function evidenceProblems(
 }
 function reviewBaseline(root: string, target: ProjectRecord, records = loadRecords(root)): string {
   const ids = new Set(verificationScope(records, target));
+  if (target.meta.type === 'check')
+    for (const link of target.meta.links.filter((link) => link.type === 'verifies')) {
+      const referenced = records.find((record) => record.meta.id === link.target);
+      if (referenced) {
+        for (const id of verificationScope(records, referenced)) ids.add(id);
+        if (referenced.meta.type === 'design')
+          for (const id of requirementScope(
+            records,
+            referenced.meta.links
+              .filter((item) => item.type === 'satisfies')
+              .map((item) => item.target),
+          ))
+            ids.add(id);
+      }
+    }
   if (target.meta.type === 'design')
     for (const id of requirementScope(
       records,
@@ -469,13 +598,43 @@ function reviewBaseline(root: string, target: ProjectRecord, records = loadRecor
   const checks = records.filter(
     (r) =>
       r.meta.type === 'check' &&
+      r.meta.status !== 'superseded' &&
       r.meta.links.some((l) => l.type === 'verifies' && ids.has(l.target)),
   );
   const baseline: Record<string, unknown> = {
     records: Object.fromEntries(
-      records.filter((r) => ids.has(r.meta.id)).map((r) => [r.meta.id, recordFingerprint(r)]),
+      records
+        .filter((r) => ids.has(r.meta.id))
+        .map((r) => [
+          r.meta.id,
+          target.meta.type === 'check' && r.meta.type === 'task'
+            ? hash(
+                JSON.stringify({
+                  type: r.meta.type,
+                  title: r.meta.title,
+                  owner: r.meta.owner,
+                  links: r.meta.links,
+                  body: r.body,
+                  requirements: requirementsFor(r),
+                  acceptance_criteria: r.meta.data.acceptance_criteria,
+                  allowed_paths: r.meta.data.allowed_paths,
+                  dependencies: dependenciesFor(r),
+                  protected_acceptance_paths: r.meta.data.protected_acceptance_paths,
+                  recipe_instance_ids: r.meta.data.recipe_instance_ids,
+                  required_tools: r.meta.data.required_tools,
+                }),
+              )
+            : recordFingerprint(r),
+        ]),
     ),
   };
+  if (target.meta.type === 'check' || target.meta.type === 'design') {
+    const protectedPaths = [
+      ...strings(target.meta.data.protected_acceptance_paths),
+      ...strings(target.meta.data.oracle_paths),
+    ];
+    if (protectedPaths.length) baseline.protected_files = snapshotPaths(root, protectedPaths);
+  }
   if (target.meta.type === 'task') {
     baseline.checks = checks.map((r) => [r.meta.id, recordFingerprint(r)]);
     baseline.files = snapshotPaths(root, [
@@ -516,6 +675,7 @@ function latestEvidence(
     )[0];
 }
 function hasReview(root: string, target: ProjectRecord, records: ProjectRecord[]): boolean {
+  if (strictRecord(root, target) && !readRoutingPolicy(root)) return false;
   let baseline: string;
   try {
     baseline = reviewBaseline(root, target, records);
@@ -533,6 +693,20 @@ function hasReview(root: string, target: ProjectRecord, records: ProjectRecord[]
         b.meta.created_at.localeCompare(a.meta.created_at) || b.meta.id.localeCompare(a.meta.id),
     );
   const review = reviews[0];
+  if (review && strictRecord(root, review) && !readRoutingPolicy(root)) return false;
+  if (
+    review &&
+    (strictRecord(root, target) || strictRecord(root, review)) &&
+    routingProblems(
+      root,
+      'reviewer',
+      typeof review.meta.data.invocation_id === 'string'
+        ? review.meta.data.invocation_id
+        : undefined,
+      invocationBinding(target),
+    ).length
+  )
+    return false;
   return Boolean(
     review &&
     review.meta.owner !== target.meta.owner &&
@@ -547,6 +721,96 @@ function hasReview(root: string, target: ProjectRecord, records: ProjectRecord[]
 }
 export function hasCurrentReview(root: string, id: string): boolean {
   return hasReview(root, getRecord(root, id), loadRecords(root));
+}
+export function assignmentReport(
+  root: string,
+  input: {
+    target_ids: string[];
+    body: string;
+    invocation_id: string;
+    covered_invocation_ids?: string[];
+  },
+): ProjectRecord {
+  const problems = workRecordProblems(root, input.body);
+  if (problems.length) throw new Error(problems.join('\n'));
+  if (!Array.isArray(input.target_ids) || !input.target_ids.length || input.target_ids.length > 32)
+    throw new Error('Assignment reports require 1 to 32 target record IDs.');
+  const receipt = readInvocation(root, input.invocation_id);
+  assertRouting(root, receipt.role, input.invocation_id, { require_completed: false });
+  const targets = [...new Set(input.target_ids)].map((id) => getRecord(root, id));
+  if (!receipt.workflow_id)
+    throw new Error('Assignment reports require a managed workflow binding.');
+  if (receipt.task_id && !input.target_ids.includes(receipt.task_id))
+    throw new Error('The report must document its assigned task.');
+  for (const id of input.covered_invocation_ids ?? []) {
+    const prior = readInvocation(root, id);
+    if (
+      prior.workflow_id !== receipt.workflow_id ||
+      prior.role !== receipt.role ||
+      prior.task_id !== receipt.task_id
+    )
+      throw new Error('A follow-up report cannot cover another role, workflow, or task.');
+    assertRouting(root, prior.role, id, { workflow_id: receipt.workflow_id });
+  }
+  const identity = hash(
+    JSON.stringify({
+      invocation_id: receipt.id,
+      targets: input.target_ids,
+      body: input.body,
+      covered: input.covered_invocation_ids ?? [],
+    }),
+  );
+  const existing = loadRecords(root).find(
+    (record) => record.meta.data.assignment_report_hash === identity,
+  );
+  if (existing) return existing;
+  return createRecord(root, {
+    type: 'knowledge',
+    title: `${receipt.role} assignment report`,
+    owner: receipt.role,
+    links: targets.map((record) => ({ type: 'documents', target: record.meta.id })),
+    data: {
+      kind: 'work-record',
+      assignment_report_hash: identity,
+      workflow_id: receipt.workflow_id,
+      task_id: receipt.task_id,
+      invocation_id: receipt.id,
+      covered_invocation_ids: input.covered_invocation_ids ?? [],
+      requested_model: receipt.requested_model,
+      confirmed_model: receipt.confirmed_model,
+    },
+    body: input.body,
+  });
+}
+export function assignmentDocumentationProblems(root: string, workflowId: string): string[] {
+  const path = safePath(root, '.verythinker/native/receipts');
+  if (!existsSync(path)) return [];
+  const reports = loadRecords(root).filter(
+    (record) =>
+      record.meta.data.kind === 'work-record' && record.meta.data.workflow_id === workflowId,
+  );
+  const problems: string[] = [];
+  for (const file of readdirSync(path).filter((file) => /^[a-f0-9-]{36}\.json$/.test(file))) {
+    const receipt = readInvocation(root, file.slice(0, -5));
+    if (
+      receipt.workflow_id !== workflowId ||
+      receipt.role === 'manager' ||
+      receipt.execution_mode !== 'native' ||
+      receipt.state !== 'completed'
+    )
+      continue;
+    const candidates = reports.filter(
+      (report) =>
+        report.meta.owner === receipt.role &&
+        (report.meta.data.invocation_id === receipt.id ||
+          strings(report.meta.data.covered_invocation_ids).includes(receipt.id)),
+    );
+    if (!candidates.some((report) => workRecordProblems(root, report.body).length === 0))
+      problems.push(
+        `Completed ${receipt.role} invocation ${receipt.id} needs its seven-section assignment report.`,
+      );
+  }
+  return problems;
 }
 export function verify(
   root: string,
@@ -581,6 +845,15 @@ export function verify(
     }
     const add = (code: string, message: string) =>
       findings.push({ code, record: task.meta.id, message });
+    const strict = strictRecord(root, task);
+    if (strict) for (const problem of toolLockProblems(root)) add('tool-integrity', problem);
+    if (strict && !readRoutingPolicy(root))
+      add(
+        'native-routing-missing',
+        'The strict routing policy is missing; restore the approved policy before continuing.',
+      );
+    for (const problem of noteFreshnessProblems(root, task)) add('knowledge-freshness', problem);
+    for (const problem of verifyFrozenRecipe(root, task)) add('protected-recipe', problem);
     const reqs = requirementsFor(task);
     if (!reqs.length) add('missing-requirements', 'Task must link at least one requirement.');
     if (!strings(task.meta.data.acceptance_criteria).length)
@@ -618,12 +891,46 @@ export function verify(
       add('invalid-requirement-ancestry', (error as Error).message);
       continue;
     }
-    const designs = records.filter((r) => r.meta.type === 'design' && scope.includes(r.meta.id));
+    const designs = records.filter(
+      (r) =>
+        r.meta.type === 'design' && r.meta.status !== 'superseded' && scope.includes(r.meta.id),
+    );
     const checks = records.filter(
       (r) =>
         r.meta.type === 'check' &&
+        r.meta.status !== 'superseded' &&
         r.meta.links.some((l) => l.type === 'verifies' && scope.includes(l.target)),
     );
+    if (strict) {
+      for (const problem of escalationProblems(root, task))
+        add('missing-sol-reassessment', problem);
+      const workflowId =
+        typeof task.meta.data.workflow_id === 'string' ? task.meta.data.workflow_id : undefined;
+      for (const source of records
+        .filter(
+          (record) =>
+            scope.includes(record.meta.id) && ['requirement', 'design'].includes(record.meta.type),
+        )
+        .concat(checks))
+        for (const problem of authoredRoutingProblems(root, source, workflowId))
+          add('native-author', problem);
+      for (const check of checks)
+        if (!hasReview(root, check, records))
+          add(
+            'missing-verification-plan-review',
+            `Verification plan needs current Sol independent review: ${check.meta.id}`,
+          );
+      if (['verified', 'accepted'].includes(gate))
+        for (const problem of routingProblems(
+          root,
+          task.meta.owner,
+          typeof task.meta.data.invocation_id === 'string'
+            ? task.meta.data.invocation_id
+            : undefined,
+          invocationBinding(task),
+        ))
+          add('native-worker', problem);
+    }
     for (const req of reqs) {
       if (!checks.some((c) => c.meta.links.some((l) => l.type === 'verifies' && l.target === req)))
         add('missing-check', `Requirement lacks a verification procedure: ${req}`);
@@ -674,6 +981,16 @@ export function verify(
   }
   return { ok: findings.length === 0, gate, findings, checked_at: now() };
 }
+function assertDispatchReadiness(root: string, task: ProjectRecord): void {
+  if (readRoutingPolicy(root) && !strictRecord(root, task))
+    throw new Error(
+      'Pending legacy work requires alpha.3 migration and Sol reassessment before dispatch.',
+    );
+  const report = verify(root, task.meta.id, strictExecution(root, task) ? 'design-ready' : 'ready');
+  // A blocked lifecycle can be resumed only after every substantive gate is current.
+  const failures = report.findings.filter((finding) => finding.code !== 'blocked');
+  if (failures.length) throw new Error(failures.map((finding) => finding.message).join('\n'));
+}
 export function startTask(
   root: string,
   id: string,
@@ -684,14 +1001,21 @@ export function startTask(
   if (typeof invocationId !== 'string' || !invocationId.trim())
     throw new Error('Task execution needs a non-empty invocation identity.');
   const task = getRecord(root, id);
+  if (strictExecution(root, task)) {
+    const receipt = assertRouting(root, task.meta.owner, invocationId, {
+      ...invocationBinding(task),
+      require_completed: false,
+    });
+    requestedModel = receipt!.requested_model;
+    confirmedModel = receipt!.confirmed_model ?? undefined;
+  }
   if (task.meta.type !== 'task' || !['draft', 'ready', 'blocked'].includes(task.meta.status))
     throw new Error('Only draft, ready, or blocked tasks can start.');
-  if (task.meta.data.escalation_required && !requestedModel)
+  if (!strictExecution(root, task) && task.meta.data.escalation_required && !requestedModel)
     throw new Error(
       'Repeated failure requires an explicit coordinator-selected model before restarting.',
     );
-  const report = verify(root, id, 'ready');
-  if (!report.ok) throw new Error(report.findings.map((f) => f.message).join('\n'));
+  assertDispatchReadiness(root, task);
   const config = readConfig(root);
   if (
     loadRecords(root).filter((r) => r.meta.type === 'task' && r.meta.status === 'in-progress')
@@ -739,8 +1063,7 @@ export function startTask(
           .length >= readConfig(root).max_workers
       )
         throw new Error('Concurrent worker limit reached.');
-      const currentGate = verify(root, id, 'ready');
-      if (!currentGate.ok) throw new Error(currentGate.findings.map((f) => f.message).join('\n'));
+      assertDispatchReadiness(root, current);
     },
   );
 }
@@ -755,7 +1078,21 @@ export function resumeTask(
     throw new Error('Task execution needs a non-empty invocation identity.');
   const task = getRecord(root, id);
   if (task.meta.type !== 'task') throw new Error('Resume requires a task.');
+  if (strictExecution(root, task)) {
+    const receipt = assertRouting(
+      root,
+      task.meta.owner,
+      invocationId ??
+        (typeof task.meta.data.invocation_id === 'string'
+          ? task.meta.data.invocation_id
+          : undefined),
+      { ...invocationBinding(task), require_completed: false },
+    );
+    requestedModel = receipt!.requested_model;
+    confirmedModel = receipt!.confirmed_model ?? undefined;
+  }
   if (task.meta.status === 'in-progress') {
+    if (strictExecution(root, task)) assertDispatchReadiness(root, task);
     if (invocationId === undefined || invocationId === task.meta.data.invocation_id) return task;
     return updateRecord(
       root,
@@ -781,6 +1118,7 @@ export function resumeTask(
       (current) => {
         if (current.meta.revision !== task.meta.revision || current.meta.status !== 'in-progress')
           throw new Error('Task changed before its invocation handoff could be recorded.');
+        if (strictExecution(root, current)) assertDispatchReadiness(root, current);
       },
     );
   }
@@ -816,6 +1154,7 @@ export function requestRepair(root: string, id: string, feedback: string): Proje
       data: {
         attempts,
         feedback,
+        repair_requested_at: now(),
         submission: null,
         escalation_required: blocked,
         blocked_reason: blocked ? 'Repeated failure requires coordinator escalation.' : null,
@@ -837,6 +1176,13 @@ export function submitTask(
   const task = getRecord(root, id);
   if (task.meta.type !== 'task' || task.meta.status !== 'in-progress')
     throw new Error('Only an in-progress task can be submitted.');
+  if (strictExecution(root, task))
+    assertRouting(
+      root,
+      task.meta.owner,
+      typeof task.meta.data.invocation_id === 'string' ? task.meta.data.invocation_id : undefined,
+      { ...invocationBinding(task), require_completed: false },
+    );
   if (!summary.trim()) throw new Error('A submission summary is required.');
   if (workRecordBody !== undefined && typeof workRecordBody !== 'string')
     throw new Error('Work record body must be a string.');
@@ -941,6 +1287,11 @@ export function reviewRecord(
   generalizationReview = false,
 ): ProjectRecord {
   const target = getRecord(root, id);
+  if (strictExecution(root, target))
+    assertRouting(root, 'reviewer', invocationId, {
+      ...invocationBinding(target),
+      require_completed: false,
+    });
   if (target.meta.type === 'task' && !['submitted', 'accepted'].includes(target.meta.status))
     throw new Error('Submit the task before recording its acceptance review.');
   if (owner === target.meta.owner || workerInvocations(target).includes(invocationId))
@@ -953,6 +1304,10 @@ export function reviewRecord(
     !invocationId.trim()
   )
     throw new Error('Review needs a decision, findings array and invocation ID.');
+  if (decision === 'pass' && findings.length)
+    throw new Error(
+      'A passing review requires findings: []; findings are unresolved defects. Put approval rationale and observations in the assignment report.',
+    );
   const records = loadRecords(root);
   if (
     target.meta.type === 'task' &&
@@ -987,11 +1342,34 @@ export function reviewRecord(
     body: `# Scope\n${id}\n\n# Decision\n${decision}\n\n# Findings\n${findings.length ? findings.join('\n') : 'No open findings reported.'}\n`,
   });
 }
-export function runCheck(root: string, id: string, taskId: string): ProjectRecord {
+export function runCheck(
+  root: string,
+  id: string,
+  taskId: string,
+  invocationId?: string,
+): ProjectRecord {
   const check = getRecord(root, id);
   const task = getRecord(root, taskId);
   if (check.meta.type !== 'check' || task.meta.type !== 'task')
     throw new Error('Provide a check and a task.');
+  if (strictExecution(root, task)) {
+    if (!readRoutingPolicy(root)) throw new Error('Strict routing policy is missing.');
+    assertRouting(root, 'check-executor', invocationId, {
+      ...invocationBinding(task),
+      require_completed: false,
+    });
+    const errors = [
+      ...authoredRoutingProblems(
+        root,
+        check,
+        typeof task.meta.data.workflow_id === 'string' ? task.meta.data.workflow_id : undefined,
+      ),
+      ...verifyFrozenRecipe(root, task),
+    ];
+    if (!hasCurrentReview(root, id))
+      errors.push('The verification procedure requires current Sol independent review.');
+    if (errors.length) throw new Error(errors.join('\n'));
+  }
   const records = loadRecords(root);
   const scope = verificationScope(records, task);
   if (!check.meta.links.some((l) => l.type === 'verifies' && scope.includes(l.target)))
@@ -1014,6 +1392,21 @@ export function runCheck(root: string, id: string, taskId: string): ProjectRecor
   const timeout = Number(check.meta.data.timeout_ms ?? 60000);
   if (!Number.isFinite(timeout) || timeout < 1 || timeout > 600000)
     throw new Error('Check timeout must be between 1 and 600000 ms.');
+  const pack_lock_hash = existsSync(safePath(root, '.verythinker/pack-lock.json'))
+    ? hash(readFileSync(safePath(root, '.verythinker/pack-lock.json')))
+    : null;
+  const tool_lock_hash = existsSync(safePath(root, '.verythinker/tool-lock.json'))
+    ? hash(readFileSync(safePath(root, '.verythinker/tool-lock.json')))
+    : null;
+  const input_snapshot = captureEvidenceInputs(root, {
+    files: file_baseline,
+    records: records.filter(
+      (record) => scope.includes(record.meta.id) || record.meta.id === check.meta.id,
+    ),
+    record_fingerprints: { ...record_baseline, [check.meta.id]: recordFingerprint(check) },
+    invocation_id: invocationId,
+    additional_files: strings(task.meta.data.protected_acceptance_paths),
+  });
   appendEvent(root, run, {
     event: 'check-start',
     check_id: id,
@@ -1045,6 +1438,7 @@ export function runCheck(root: string, id: string, taskId: string): ProjectRecor
   });
   const receipt = {
     schema_version: 1,
+    execution_invocation_id: invocationId ?? null,
     run_id: run,
     task_id: taskId,
     check_id: id,
@@ -1054,9 +1448,9 @@ export function runCheck(root: string, id: string, taskId: string): ProjectRecor
       records.filter((r) => scope.includes(r.meta.id)).map((r) => [r.meta.id, r.meta.revision]),
     ),
     file_baseline,
-    pack_lock_hash: existsSync(safePath(root, '.verythinker/pack-lock.json'))
-      ? hash(readFileSync(safePath(root, '.verythinker/pack-lock.json')))
-      : null,
+    input_snapshot,
+    pack_lock_hash,
+    tool_lock_hash,
     revision: {
       git_commit: git.status === 0 ? git.stdout.trim() : null,
       workspace_hash: hash(JSON.stringify(file_baseline)),
@@ -1155,6 +1549,20 @@ export function contextPacket(root: string, id: string, maxChars = 18000): unkno
     decisions: task.meta.data.decisions ?? [],
     assumptions: task.meta.data.assumptions ?? [],
     tools: task.meta.data.tools ?? [],
+    routing:
+      task.meta.data.routing_required === true
+        ? {
+            receipt_required: true,
+            role: task.meta.owner,
+            strong_model: 'gpt-6.1-sol',
+            worker_models: ['gpt-6-luna', 'gpt-5.6-terra'],
+            observation:
+              'Native acknowledgment and successful inference are validated independently of agent-written strings.',
+          }
+        : { legacy: true },
+    recipe_instance_ids: task.meta.data.recipe_instance_ids ?? [],
+    protected_acceptance_paths: task.meta.data.protected_acceptance_paths ?? [],
+    required_tools: task.meta.data.required_tools ?? [],
     outputs: [
       ...new Set([
         ...strings(task.meta.data.outputs),

@@ -53,9 +53,26 @@ export function atomicWrite(path: string, value: string | Buffer): void {
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temporary, value, { flag: 'wx' });
-    renameSync(temporary, path);
+    retryWindowsFileOperation(() => renameSync(temporary, path));
   } finally {
-    if (existsSync(temporary)) rmSync(temporary);
+    if (existsSync(temporary)) retryWindowsFileOperation(() => rmSync(temporary));
+  }
+}
+function retryWindowsFileOperation(action: () => void): void {
+  const delays = [10, 25, 50, 100, 200, 400];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      action();
+      return;
+    } catch (error) {
+      if (
+        process.platform !== 'win32' ||
+        !['EPERM', 'EACCES', 'EBUSY'].includes(String((error as NodeJS.ErrnoException).code)) ||
+        attempt >= delays.length
+      )
+        throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[attempt]);
+    }
   }
 }
 export function readConfig(root: string): ProjectConfig {
@@ -372,6 +389,14 @@ export function createRecord(root: string, input: CreateRecord): ProjectRecord {
       'templates',
       `${input.data?.kind === 'work-record' ? 'work-record' : input.type}.md`,
     );
+    const managedTask =
+      input.type === 'task' &&
+      existsSync(safePath(root, '.verythinker/routing.json')) &&
+      records.some(
+        (candidate) =>
+          candidate.meta.id === input.data?.workflow_id &&
+          candidate.meta.data.kind === 'manager-workflow',
+      );
     const record: ProjectRecord = {
       meta: {
         schema_version: 1,
@@ -384,7 +409,18 @@ export function createRecord(root: string, input: CreateRecord): ProjectRecord {
         created_at: date,
         updated_at: date,
         links: input.links ?? [],
-        data: input.data ?? {},
+        data: {
+          ...input.data,
+          ...(managedTask
+            ? {
+                documentation_required: true,
+                documentation_paths: input.data?.documentation_paths ?? [],
+              }
+            : {}),
+          ...(existsSync(safePath(root, '.verythinker/routing.json'))
+            ? { routing_required: true }
+            : {}),
+        },
       },
       body:
         input.body ??
@@ -409,6 +445,13 @@ export function updateRecord(
   return withLock(root, () => {
     const record = getRecord(root, id);
     precondition?.(record);
+    if (
+      record.meta.data.routing_required === true &&
+      patch.data &&
+      Object.hasOwn(patch.data, 'routing_required') &&
+      patch.data.routing_required !== true
+    )
+      throw new Error('Strict routing cannot be removed from a managed record.');
     if (patch.status === 'accepted' && record.meta.status !== 'accepted')
       throw new Error(
         'Use task accept or record approve to record a validated acceptance decision.',

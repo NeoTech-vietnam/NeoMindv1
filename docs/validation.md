@@ -1,49 +1,48 @@
-# Local validation of 0.1.0-alpha.2
+# Alpha.3 validation
 
-Observed on **2026-10-11**, Windows x64, Node.js **24.18.0**, npm **12.0.2**. The package is a local prerelease. Source hashes in the saved evidence identify the tested inputs, including working-tree changes at verification time. No npm publication is claimed. Remote Windows and Ubuntu checks also passed at commit `aebdb5cb39910ca617800834bc66424c973e58eb`; see the recorded run below.
+Validation was performed on Windows x64 with Node.js 24.18.0 and npm 12.0.2. Source and input hashes in the individual reports identify the tested working-tree inputs. The alpha.2 report is preserved separately in [historical validation](validation/alpha2.md); its results do not establish alpha.3 behavior.
 
-## Automated engineering and adapter checks
+## Engineering and boundary checks
 
-`npm test` passed **89 tests**, with no failures or skips. Coverage includes:
+The automated suite exercises stable record IDs, SQLite/FTS5 rebuilds, typed links, batch requirement coverage, dependencies, bounded context, interrupted work, evidence applicability, independent review, and documentation gates. Alpha.3 adds:
 
-- Stable IDs after rename/deletion, schema validation, duplicate IDs, broken/invalid links, and dependency cycles.
-- SQLite/FTS5 refresh/rebuild, bounded serialized context, three-worker limits, interrupted task recovery, dead/live writer locks, and one repair before escalation.
-- Current requirements/design/source baselines, independent reviews, added source files, newer failed checks/reviews, tampered/unreadable/missing logs and mismatched receipts.
-- Evidence archiving, new-process resumption, public/private knowledge boundaries, exact pack versions/binary assets, reviewed pack upgrades, and draft-PR retry recovery.
-- Existing instruction/configuration preservation, JSONC comments, alternate TOML layouts, user edits/deletions, conflict candidates, role/model metadata, and locally executed generated hook commands.
-- Actual MCP stdio initialization, tool discovery, record mutation, gate invocation, software/embedded workflow fixtures, pilot checks, and evaluation harness integrity.
-- Automatic manager instruction routing on all adapters, idempotent intake, current specialist contributions, decision/allocation baselines, mandatory substantive documentation, closure, publication blockers, and preserved replacement-plan history.
-- Former implementer exclusion after handoff and repair reassignment, intermediate derived requirement changes, documentation/work-record mutation, and rejection of closure when inputs change during publication.
-- Two competing publication processes creating one branch/PR through a mock API, stable publication identity before mutations, lost-response recovery, and explicit candidate retirement with preserved publication history.
+- Native model acknowledgment, completed inference, signed receipt integrity, reroute rejection, interruption/resumption, bounded waiting, ownership, unavailable-model fallback, and permission blockers.
+- Strict source authorship and planning review before worker dispatch, current receipt requirements, repeated-repair Sol reassessment, migration of pending work, and preservation of historical acceptance.
+- Invocation-bound role and task scope, approved pinned providers, isolated installs, transitive lock integrity, missing capabilities, and explicit optional substitutions.
+- Exact project snapshot bytes, historical verification inputs, binary/deleted files, immutable references, publication recovery, concurrent baseline movement, sensitive-content blockers, and restoration.
+- Cornell structure, sources, freshness, runnable practice, preservation of authored solutions, protected recipe inputs, independent expected values, reviewed replacements, workflow binding, and loaded-generator identity.
+- Installer preservation of existing configuration, authored overrides, conflicts, managed resource updates, and checks that remain effective without hooks.
 
-Review identities in automated fixtures establish gate behavior; they do not measure engineering review quality or authenticate a human reviewer. Owner identity is a recorded engineering assertion, rather than an access-control service.
+Protocol simulations and locally fabricated validation objects used by boundary tests establish rejection and gate mechanics. They do not authenticate an account or perform model inference. Production-injected transports remain labelled `protocol-fixture` and cannot authorize strict acceptance.
 
-## Installed npm artifact
+The broad local run passed **181 tests**, without failures or skips, in 396.94 seconds. Subsequent audit corrections receive focused regression checks and are included in the final CI source revision. The local result log is `artifacts/alpha3-tests-final.txt`.
 
-`npm run package:smoke` builds a tarball and installs it into a fresh temporary project. It checks resource resolution, generation for all three platforms, preservation of existing instructions, an actual check, evidence archive, fixture review/acceptance, interrupted and new-process resumption, index rebuild, user-edit preservation, and MCP discovery/invocation from the installed package. The alpha.2 procedure additionally invokes all five manager operations through the installed stdio MCP server, checks specialist decision fixtures, required documentation, handoff, missing-review rejection, closure/report idempotency, and persisted resumption. The resulting smoke report records the observed result and exact artifact hash.
+## Authenticated native execution
 
-The local deliverable is `artifacts/verythinker-0.1.0-alpha.2.tgz`. The smoke report in `artifacts/package-smoke.json` records its SHA-256 and verification environment. The installed-package smoke passed. The package excludes generated Python bytecode and object files. [CI run 38116332997](https://github.com/VuThach3001/VeryThinker/actions/runs/38116332997) passed tests, packaging, and installed-package lifecycle/MCP checks on both Windows and Ubuntu at the recorded commit. An earlier Windows run exposed a CRLF-sensitive test assertion; that assertion was corrected before this successful run.
+[Native model observations](validation/native-alpha3-report.json) record actual completed requirements and review invocations using `gpt-6.1-sol`, and a bounded developer invocation using `gpt-6-luna`, through the pinned Codex 0.162.1 App Server. Native model/provider acknowledgments, thread/turn identities, completion, and limitations are recorded. There were no fallback or reroute observations in that access demonstration.
 
-NeoLearning was upgraded from alpha.1 to alpha.2. The upgrade installed six new managed resources and updated 59 managed resources with **zero conflicts**. Project instructions and unrelated dirty work were preserved. `doctor` reported the three adapters configured, the manager and automatic draft PR policy enabled, and no warnings. Native discovery/routing/MCP/hook capabilities remain unverified; a configured adapter is not an observed native session.
+The [managed increment report](validation/native-alpha3-managed-report.json) separately records the longer engineering demonstration, including its actual completion state, interruptions, failed gates, and specialist results. Read `increment_acceptance_demonstrated` before treating this run as accepted. Account access alone is insufficient to claim a completed increment, automatic archive publication, or measured routing efficiency.
 
-## Pilot and optional-provider measurements
+The native acknowledgment reports the client's selected model; it is not independent backend attestation. Local receipt signatures detect accidental or unauthorized changes within the documented local boundary. They do not defend against a process with unrestricted access to the project and private signing cache. Native permission refusals remain blockers; the bridge never grants a pending approval on the user's behalf.
 
-- [Pilot evidence](../examples/verification.json) records software behavior/persistence, embedded normal/fault cases, the actual ngspice 46 simulation, and RISC-V GCC 14.2.0 compilation with warnings treated as errors. The installed Digital Mars 8.42n compiler also built and executed the C firmware harness: **8,215 comparisons** against the JavaScript reference model passed, covering ADC/prior-state combinations, fault/calibration boundaries, and sequential recovery/hysteresis. This is host execution and simulation evidence; embedded acceptance is limited to the demonstrated environments.
-- [CodeGraph evidence](validation/codegraph-report.json) records all **12 passing** checks for `@colbymchenry/codegraph@1.6.2` on a small Windows C/C++ fixture, including cross-file callers, edit/add/delete sync, MCP, reconnect and live-watch freshness. The optional integration defaults to disabled; explicit enablement validates and hash-locks the report. Its native-client invocation remains unverified.
-- A fresh invocation of the finish skill correctly rejected stale evidence and missing independent review, preserved unavailable model observations, and declined to claim measured tiered-routing benefits. Its ambiguous gate wording was tightened to `verify --gate accepted` followed by `task accept`.
+## Providers and engineering pilots
 
-## Native evaluation and remaining release gates
+[Provider observations](validation/tools-alpha3-report.json) record pinned package integrity, actual discovery, availability, and invocation results. CodeGraph Windows C/C++ analysis and freshness were exercised. Context7 performed an actual library lookup without an API key; returned source suitability still needs review. Playwright tool discovery was observed; browser execution is unverified. Exact URL checks cover explicit navigation only; actions and redirects inherit the provider/client network permissions.
 
-[Recorded native observations](evaluation-results.json) contain rejected model probes and one failed software trial. The installed Codex client/account rejected `gpt-6.1-sol` and `gpt-6-luna`. A configured Astra availability probe succeeded, but the implementation trial's read commands were rejected with `blocked by policy`; no implementation or independent review completed. The report records observed token usage and leaves backend model identity, price and quota consumption unavailable.
+[Current pilot evidence](validation/pilots-alpha3-report.json) records twelve passing JavaScript checks, ngspice 46 DC simulation, RISC-V GCC 14.2.0 compilation, and **8,215** executed firmware/reference comparisons using Digital Mars. Source hashes identify the inputs. The embedded demonstration uses ideal circuit simulation and host execution; it does not establish MCU execution, physical board performance, HIL, thermal/EMC behavior, timing, or power-loss durability.
 
-**Seventeen planned trials remain unrecorded.** Native skill discovery, effective model routing, configured MCP and lifecycle hook invocation still need client conformance. The execution policy was not disabled or bypassed. This environmental failure does not establish the model's engineering ability or compare routing efficiency.
+## Packaged installation and consumer upgrade
 
-Automated draft-PR tests use mock GitHub transactions, including concurrent publication, retry recovery and privacy. Those tests alone do not establish a live upstream submission or human approval. Physical hardware/HIL, board ratings, thermal/EMC/timing, power-loss durability, formal ASPICE assessment, authenticated client conformance and npm publication are outside the demonstrated evidence. These boundaries remain [stable release criteria](release.md).
+The local deliverable is `artifacts/verythinker-0.1.0-alpha.3.tgz`. Installed-package smoke verifies resource resolution, all three generated adapters, twelve roles, three recipes, MCP discovery/invocation, strict missing-receipt rejection, and preservation of user edits. A separate explicitly labelled legacy-policy fixture exercises the complete record lifecycle and new-process resumption. The legacy fixture does not establish native model execution.
 
-## Observed draft PR delivery
+The smoke report records the exact final tarball hash. Consumer migration preserves authored model/configuration changes as reviewable conflicts and keeps accepted legacy evidence attached to its original baseline. Existing running MCP processes retain the previously loaded package until their owning client reloads them.
 
-[Implementation PR #1](https://github.com/VuThach3001/VeryThinker/pull/1) contains the engineering package and autonomous native manager. [Knowledge PR #2](https://github.com/VuThach3001/VeryThinker/pull/2) was created through the actual contribution publisher after a separate agent reviewed the generalized lesson, applicability, limitations, privacy, and finalized provenance. It contains only the versioned pack manifest and lesson. Retrying the publisher returned the same branch and PR; neither proposal was merged.
+Windows and Ubuntu CI results must be observed for the published source revision before being reported as passed. A workflow file alone is not CI evidence. Local packaging is not npm registry publication.
 
-The shared repository is private. These PRs and the lesson's immutable implementation source require repository access. The lesson records that restriction and does not claim anonymous source accessibility. This live publisher check establishes authenticated draft creation and persisted retry recovery, not autonomous native-client execution or human merge approval.
+## Remaining compatibility and evaluation boundaries
 
-[CAMEL research](camel-research.md) records the inspected source snapshot and coordination mechanisms adopted independently. No CAMEL Python runtime, source, or prompts are bundled. Native clients remain responsible for actual delegation; deterministic manager tests prove core policy/gate behavior rather than model decision quality.
+Strict execution targets the demonstrated Codex App Server surface first. Claude Code and Copilot resources are generated, but exact Sol/Luna/Terra execution remains restricted until independently verified on those clients. Generated skill/hook files do not establish native picker discovery or hook trust. Core acceptance checks remain mandatory when hooks are disabled.
+
+The eighteen comparative agent trials remain incomplete. Alpha.3 implements the user-selected routing policy; it does not claim demonstrated cost/time savings or a general quality advantage over one strong agent. The V-model and Automotive SPICE mapping are workflow guidance, not a capability rating or formal assessment.
+
+Shared knowledge produces reviewed draft PRs with human merge approval. Private project archives preserve project records and reproducible inputs separately. No automatic merge, public project disclosure, or registry publication is claimed.

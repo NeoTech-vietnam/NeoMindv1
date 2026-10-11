@@ -251,6 +251,15 @@ test('completion requires collected evidence, a submission and a separate review
     () => reviewTask(root, work.task.meta.id, 'reviewer', 'pass', [], 'developer-invocation'),
     /different owner/,
   );
+  const reviewCount = loadRecords(root).filter((record) => record.meta.type === 'review').length;
+  assert.throws(
+    () => reviewTask(root, work.task.meta.id, 'reviewer', 'pass', ['Approved boundary coverage.']),
+    /passing review requires findings/,
+  );
+  assert.equal(
+    loadRecords(root).filter((record) => record.meta.type === 'review').length,
+    reviewCount,
+  );
   reviewTask(root, work.task.meta.id, 'reviewer', 'pass', [], 'reviewer-invocation');
   assert.equal(acceptTask(root, work.task.meta.id).meta.status, 'accepted');
   assert.equal(verify(root, work.task.meta.id, 'accepted').ok, true);

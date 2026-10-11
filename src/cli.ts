@@ -36,6 +36,23 @@ import {
   workflowStatus,
   finishWorkflow,
 } from './manager.js';
+import {
+  startNative,
+  nativeStatus,
+  waitNative,
+  interruptNative,
+  resumeNative,
+  shutdownNative,
+} from './native.js';
+import {
+  prepareArchive,
+  publishArchive,
+  archiveStatus,
+  restoreArchive,
+  reassessArchive,
+} from './archives.js';
+import { dispatchKnowledgeCommand } from './knowledge-cli.js';
+import { managedRun, type ManagedRunInput } from './managed.js';
 import { recordTypes, type Gate, type Platform, type Profile, type RecordType } from './types.js';
 
 const help = `VeryThinker engineering workflow (Node.js 24+)
@@ -44,6 +61,7 @@ Usage: verythinker <command> [action] [id] [options]
   init --name NAME --profile basic|software|embedded --platforms codex,claude,copilot
   doctor | update
   workflow begin --requirement TEXT [--title TITLE] [--request-id ID]
+  workflow run --requirement TEXT | --data '{"requirements":["..."]}'
   workflow discuss|decide|finish WORKFLOW_ID --data JSON | workflow status [WORKFLOW_ID]
   record create TYPE --title TITLE --owner ROLE --data JSON [--body FILE]
   record update ID --data JSON [--body FILE] | record show ID | record list [--type TYPE]
@@ -61,6 +79,11 @@ Usage: verythinker <command> [action] [id] [options]
   pack list | pack install NAME_OR_PATH [--decision CHANGE_ID] | pack show ID | pack suggest TERMS
   index rebuild
   mcp
+  native run --data JSON | native status [ID] | native wait|interrupt|resume ID
+  archive prepare WORKFLOW_ID | archive publish|status SNAPSHOT_ID | archive restore ID --destination DIRECTORY | archive reassess WORKFLOW_ID --data JSON
+  note create --data JSON | note validate ID
+  recipe list|resolve ID|prepare --data JSON|run ID|revise ID --data JSON
+  capability describe ROLE|resolve --data JSON|invoke --data JSON
   codegraph enable --report FILE --executable FILE --args JSON
 Options: --project DIRECTORY --json --help --version
 
@@ -104,6 +127,9 @@ async function main(): Promise<void> {
       'requirement',
       'request-id',
       'work-record',
+      'destination',
+      'disposition',
+      'wait-ms',
     ].map((k) => [k, { type: 'string' }]),
   );
   for (const key of ['json', 'help', 'version', 'impact', 'generalization-review'])
@@ -142,6 +168,17 @@ async function main(): Promise<void> {
           .filter(Boolean)
       : [];
   let result: unknown;
+  const specialized = await dispatchKnowledgeCommand(
+    root,
+    command,
+    action,
+    parsed.positionals.slice(2),
+    data(),
+  );
+  if (specialized.handled) {
+    console.log(json(specialized.result));
+    return;
+  }
   switch (command) {
     case 'init': {
       const config = initialize(root, {
@@ -161,7 +198,7 @@ async function main(): Promise<void> {
       result = doctor(root);
       break;
     case 'workflow': {
-      if (action === 'begin') {
+      if (action === 'begin' || action === 'run') {
         if (!existsSync(resolve(root, '.verythinker/config.json'))) {
           initialize(root, {
             name: String(o.name ?? 'VeryThinker project'),
@@ -171,12 +208,42 @@ async function main(): Promise<void> {
           installProject(root);
           installPack(root, 'engineering-basics');
         }
-        result = beginWorkflow(root, {
-          requirement: needed(o.requirement, '--requirement'),
-          title: o.title as string | undefined,
-          invocation_id: o.invocation as string | undefined,
-          request_id: o['request-id'] as string | undefined,
-        });
+        const input = data();
+        const specification = {
+          ...input,
+          ...(Array.isArray(input.requirements)
+            ? { requirements: input.requirements as string[] }
+            : input.workflow_id
+              ? {}
+              : {
+                  requirement: needed(
+                    o.requirement ?? input.requirement,
+                    '--requirement or --data requirement(s)',
+                  ),
+                }),
+          ...(o.title ? { title: String(o.title) } : {}),
+          ...(o['request-id'] ? { request_id: String(o['request-id']) } : {}),
+          ...(typeof input.change_type === 'string'
+            ? { change_type: input.change_type as never }
+            : {}),
+        };
+        result =
+          action === 'begin'
+            ? beginWorkflow(root, specification as never)
+            : await managedRun(root, specification as ManagedRunInput);
+        if (action === 'run') {
+          const managed = result as Awaited<ReturnType<typeof managedRun>>;
+          let invocation = managed.invocation;
+          while (invocation && ['starting', 'running'].includes(invocation.state))
+            invocation = await waitNative(root, invocation.id, 60000);
+          if (invocation)
+            result = {
+              ...managed,
+              invocation,
+              workflow: workflowStatus(root, invocation.workflow_id ?? undefined),
+            };
+          if (invocation?.state === 'waiting-native-permission') await shutdownNative();
+        }
       } else if (action === 'status') result = workflowStatus(root, id);
       else if (action === 'discuss')
         result = discussWorkflow(root, needed(id, 'Workflow ID'), data() as never);
@@ -335,7 +402,12 @@ async function main(): Promise<void> {
     case 'check':
       if (action === 'archive') result = archiveEvidence(root, needed(id, 'Evidence ID'));
       else if (action === 'run')
-        result = runCheck(root, needed(id, 'Check ID'), needed(o.task, '--task'));
+        result = runCheck(
+          root,
+          needed(id, 'Check ID'),
+          needed(o.task, '--task'),
+          o.invocation as string | undefined,
+        );
       else throw new Error('Use check run CHECK_ID --task TASK_ID or check archive EVIDENCE_ID.');
       break;
     case 'context':
@@ -415,9 +487,44 @@ async function main(): Promise<void> {
     }
     case 'mcp': {
       const { startMcp } = await import('./mcp.js');
-      await startMcp(root);
+      await startMcp(root, { invocation_id: o.invocation as string | undefined });
       return;
     }
+    case 'native': {
+      const input = data();
+      if (action === 'status') result = nativeStatus(root, id);
+      else if (action === 'wait')
+        result = await waitNative(root, needed(id, 'Invocation ID'), Number(o['wait-ms'] ?? 60000));
+      else if (action === 'interrupt')
+        result = await interruptNative(root, needed(id, 'Invocation ID'));
+      else if (action === 'resume')
+        result = await resumeNative(root, needed(id, 'Invocation ID'), input);
+      else if (action === 'run') {
+        let invocation = await startNative(root, input as never);
+        while (['starting', 'running'].includes(invocation.state))
+          invocation = await waitNative(root, invocation.id, 60000);
+        result = invocation;
+        if (invocation.state === 'waiting-native-permission') await shutdownNative();
+      } else throw new Error('Use native run|status|wait|interrupt|resume.');
+      break;
+    }
+    case 'archive':
+      if (action === 'prepare')
+        result = prepareArchive(root, needed(id, 'Workflow ID'), {
+          disposition: (o.disposition ?? 'accepted') as never,
+        });
+      else if (action === 'publish') result = publishArchive(root, needed(id, 'Snapshot ID'));
+      else if (action === 'status') result = archiveStatus(root, id);
+      else if (action === 'restore')
+        result = restoreArchive(
+          root,
+          needed(id, 'Snapshot ID'),
+          needed(o.destination, '--destination'),
+        );
+      else if (action === 'reassess')
+        result = reassessArchive(root, needed(id, 'Workflow ID'), data() as never);
+      else throw new Error('Use archive prepare|publish|status|restore|reassess.');
+      break;
     default:
       throw new Error(`Unknown command: ${command}. Use --help.`);
   }
