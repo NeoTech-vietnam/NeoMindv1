@@ -966,6 +966,19 @@ function githubRequest(method: string, endpoint: string, body?: unknown): any {
     );
   return JSON.parse(result.stdout);
 }
+/** Check the publication boundary before freezing a new manager archive intent. */
+export function assertPrivateArchiveDestination(
+  root: string,
+  options: { request?: ArchiveRequest } = {},
+): ArchivePolicy {
+  const policy = policyFor(root);
+  const request = options.request ?? githubRequest;
+  if (request('GET', `repos/${policy.repository}`).private !== true)
+    throw new Error(
+      'Project archives require a confirmed private upstream repository. No project records were uploaded.',
+    );
+  return policy;
+}
 function ref(request: ArchiveRequest, repository: string, name: string): string | null {
   try {
     const value = request('GET', `repos/${repository}/git/ref/heads/${encodeURIComponent(name)}`);
@@ -1430,7 +1443,8 @@ export function reassessArchive(
       );
     const changeFingerprint = recordFingerprint(change);
     const publicationPath = safePath(root, `${snapshot.path}/publication.json`);
-    const publication = existsSync(publicationPath)
+    const publicationExists = existsSync(publicationPath);
+    const publication = publicationExists
       ? (JSON.parse(readFileSync(publicationPath, 'utf8')) as ArchivePublication)
       : null;
     if (
@@ -1443,7 +1457,8 @@ export function reassessArchive(
         'Archive publication identity is inconsistent; recover it before reassessment.',
       );
     const request = input.request ?? githubRequest;
-    if (request('GET', `repos/${policy.repository}`).private !== true)
+    const privateUpstream = request('GET', `repos/${policy.repository}`).private;
+    if (privateUpstream !== true && privateUpstream !== false)
       throw new Error('Archive reassessment requires a confirmed private upstream.');
     const baseline = ref(request, policy.repository, `${policy.namespace}/baseline`);
     const release = ref(
@@ -1456,6 +1471,13 @@ export function reassessArchive(
       policy.repository,
       `${policy.namespace}/increments/${manifest.increment_id}`,
     );
+    if (
+      privateUpstream === false &&
+      (publicationExists || baseline !== null || release !== null || increment !== null)
+    )
+      throw new Error(
+        'Public archive recovery requires a never-started snapshot with no publication receipt or project references. Preserve the intent and recover its recorded upstream history.',
+      );
     let acceptedCommit = Boolean(
       publication?.commit && [baseline, release, increment].includes(publication.commit),
     );

@@ -37,7 +37,7 @@ The local deliverable is `artifacts/verythinker-0.1.0-alpha.3.tgz`. Installed-pa
 
 The smoke report records the exact final tarball hash. Consumer migration preserves authored model/configuration changes as reviewable conflicts and keeps accepted legacy evidence attached to its original baseline. Existing running MCP processes retain the previously loaded package until their owning client reloads them.
 
-Windows and Ubuntu CI results must be observed for the published source revision before being reported as passed. A workflow file alone is not CI evidence. Local packaging is not npm registry publication.
+[Windows and Ubuntu CI](https://github.com/VuThach3001/VeryThinker/actions/runs/38141739950) passed dependency installation, the full 185-test suite, package inspection/build, and installed-package smoke at source commit `646a4949aded1b1c950418187c30c1690ca58613`. Windows passed 184 tests with one optional host-C check skipped; Ubuntu passed 181 with the Windows file-lock and three Windows CodeGraph checks skipped. There were no failures. [Structured CI observations](validation/ci-alpha3-report.json) preserve those limits. An earlier Windows failure exposed the returned-versus-persisted body mismatch; storage now returns canonical persisted bodies, with a regression test covering CRLF and missing terminal newlines. Local packaging is not npm registry publication.
 
 ## Remaining compatibility and evaluation boundaries
 

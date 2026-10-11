@@ -4,7 +4,7 @@ An archive preserves project engineering history in a confirmed private upstream
 
 ## Identity and releases
 
-The installer creates project-owned `.verythinker/archive.json`. Legacy projects without this policy retain their previous behavior. The initial namespace uses the project directory name and stable project ID; it is persisted and survives directory renaming. The default upstream is `VuThach3001/VeryThinker`. Publication checks the upstream's current `private` status before creating blobs. A public, inaccessible, or uninitialized target is a recorded publication blocker.
+The installer creates project-owned `.verythinker/archive.json`. Legacy projects without this policy retain their previous behavior. The initial namespace uses the project directory name and stable project ID; it is persisted and survives directory renaming. The default upstream is `VuThach3001/VeryThinker`. The manager checks current private visibility before preparing a new accepted publication intent, using the read-only destination preflight. Publication checks visibility again before creating blobs. A public, inaccessible, or uninitialized target is a recorded publication blocker.
 
 Branches have these forms:
 
@@ -46,6 +46,8 @@ Use `reassessArchive` when the captured baseline or source inputs changed and re
 
 The operation confirms private upstream visibility and reads baseline, release, increment, and applicable ancestry. An accepted commit already included in the baseline, a frozen release/increment, or accepted publication history prevents retirement. No remote reference is forced or deleted.
 
+A narrow recovery exception handles a snapshot prepared for a public destination before the manager's preflight was available. The original destination must still match the frozen manifest. A current independent change review is required, `publication.json` must be absent, and the remote project baseline, release, and increment references must all be absent. Any publication receipt or project reference blocks this exception. The operation preserves the frozen snapshot and report ID while retiring the never-started pointer; only afterward can the project policy select a private destination for fresh preparation. It never uploads project content to the public repository or retargets existing publication history.
+
 For an unpublished intent, an immutable reassessment receipt preserves the original snapshot, publication state, review identity, reason, and observed baseline. The active pointer is cleared while retaining its manager report ID. Fresh preparation still requires current requirements, task acceptance, checks, and independent reviews; the reassessment operation does not waive those gates. Repeated calls recover the same receipt.
 
 When the baseline advanced to a verified completed same-project snapshot already cached locally, the operation reconciles the project baseline and release metadata. Unchanged inputs must still match that known snapshot. A reviewed change may identify `affected_paths` within assigned task scope and `affected_records` within the workflow closure; those intentional divergences require fresh affected verification before completion. Unknown remote baselines or unreviewed local differences preserve the current intent and record a precise integration/revalidation blocker. Remote archive hydration is not implemented by this operation.
@@ -57,6 +59,7 @@ Content scanning catches explicit credential patterns; it is not a comprehensive
 ## Core interfaces
 
 - `ensureArchivePolicy` installs missing project-owned policy; `readArchivePolicy` reports its absence for legacy projects.
+- `assertPrivateArchiveDestination` checks current private visibility without preparing a snapshot or writing publication state.
 - `prepareArchive` creates a working or accepted snapshot from one workflow.
 - `publishArchive` publishes the frozen snapshot with persisted stage recovery.
 - `archiveStatus` reports snapshots and publication status.

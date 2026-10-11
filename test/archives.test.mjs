@@ -36,6 +36,7 @@ import { validateEvidenceInputs } from '../dist/evidence-inputs.js';
 import {
   ensureArchivePolicy,
   readArchivePolicy,
+  assertPrivateArchiveDestination,
   prepareArchive,
   publishArchive,
   archiveStatus,
@@ -439,6 +440,32 @@ test('public upstream and stale local inputs block upload before blob creation',
     false,
   );
 });
+test('private destination preflight is read-only and rejects public or unconfirmed visibility before preparation', (t) => {
+  const work = fixture(t);
+  const policyPath = join(work.root, '.verythinker/archive.json');
+  const originalPolicy = readFileSync(policyPath);
+  const publicRemote = github({ privateRepo: false });
+  assert.throws(
+    () => assertPrivateArchiveDestination(work.root, { request: publicRemote.request }),
+    /confirmed private/,
+  );
+  assert.equal(publicRemote.calls.length, 1);
+  assert.equal(publicRemote.calls[0].method, 'GET');
+  assert.equal(existsSync(join(work.root, '.verythinker/archives')), false);
+  assert.equal(existsSync(join(work.root, '.verythinker/archive-intents')), false);
+  assert.deepEqual(readFileSync(policyPath), originalPolicy);
+  assert.throws(
+    () => assertPrivateArchiveDestination(work.root, { request: () => ({}) }),
+    /confirmed private/,
+  );
+  const privateRemote = github();
+  assert.deepEqual(
+    assertPrivateArchiveDestination(work.root, { request: privateRemote.request }),
+    readArchivePolicy(work.root),
+  );
+  assert.equal(privateRemote.calls.length, 1);
+  assert.deepEqual(readFileSync(policyPath), originalPolicy);
+});
 test('lost commit and baseline update responses recover the same publication identities', (t) => {
   const work = fixture(t);
   const snapshot = prepareArchive(work.root, work.parent.meta.id);
@@ -625,6 +652,146 @@ function reassessment(work, snapshot, reviewed = true) {
   );
   return { change, reason, intentPath };
 }
+
+test('reviewed public-target recovery retires only a never-started intent and preserves its frozen history', (t) => {
+  const work = fixture(t);
+  const snapshot = prepareArchive(work.root, work.parent.meta.id);
+  const publicRemote = github({ privateRepo: false });
+  assert.throws(
+    () => publishArchive(work.root, snapshot.snapshot_id, { request: publicRemote.request }),
+    /confirmed private/,
+  );
+  const publicationPath = join(work.root, snapshot.path, 'publication.json');
+  assert.equal(existsSync(publicationPath), false);
+  const approval = reassessment(work, snapshot, false);
+  const originalManifest = readFileSync(join(work.root, snapshot.path, 'manifest.json'));
+  assert.throws(
+    () =>
+      reassessArchive(work.root, work.parent.meta.id, {
+        change_id: approval.change.meta.id,
+        reason: approval.reason,
+        request: publicRemote.request,
+      }),
+    /current independent review/,
+  );
+  reviewRecord(
+    work.root,
+    approval.change.meta.id,
+    'reviewer',
+    'pass',
+    [],
+    'public-recovery-reviewer',
+  );
+  const result = reassessArchive(work.root, work.parent.meta.id, {
+    change_id: approval.change.meta.id,
+    reason: approval.reason,
+    request: publicRemote.request,
+  });
+  assert.equal(result.status, 'ready-for-fresh-preparation');
+  assert.equal(result.retired_snapshot_id, snapshot.snapshot_id);
+  assert.deepEqual(readFileSync(join(work.root, snapshot.path, 'manifest.json')), originalManifest);
+  assert.equal(existsSync(publicationPath), false);
+  const intent = JSON.parse(readFileSync(approval.intentPath));
+  assert.equal(intent.snapshot_id, undefined);
+  assert.equal(intent.report_id, 'stable-report-reference');
+  assert.equal(intent.reassessment_id, result.reassessment_id);
+  assert.equal(
+    publicRemote.calls.every((call) => call.method === 'GET'),
+    true,
+  );
+  const policy = readArchivePolicy(work.root);
+  writeFileSync(
+    join(work.root, '.verythinker/archive.json'),
+    JSON.stringify(
+      {
+        ...policy,
+        repository: 'example/new-private',
+      },
+      null,
+      2,
+    ) + '\n',
+  );
+  const next = prepareArchive(work.root, work.parent.meta.id);
+  assert.notEqual(next.snapshot_id, snapshot.snapshot_id);
+  assert.equal(next.manifest.repository, 'example/new-private');
+  assert.deepEqual(readFileSync(join(work.root, snapshot.path, 'manifest.json')), originalManifest);
+});
+
+test('public-target recovery rejects every publication stage and any managed project reference', (t) => {
+  const work = fixture(t);
+  const snapshot = prepareArchive(work.root, work.parent.meta.id);
+  const approval = reassessment(work, snapshot);
+  const publicRemote = github({ privateRepo: false });
+  const originalIntent = readFileSync(approval.intentPath);
+  const publicationPath = join(work.root, snapshot.path, 'publication.json');
+  for (const status of [
+    'planned',
+    'blobs-created',
+    'tree-created',
+    'commit-created',
+    'baseline-advanced',
+    'release-created',
+    'completed',
+  ]) {
+    const state = {
+      schema_version: 1,
+      snapshot_id: snapshot.snapshot_id,
+      manifest_hash: snapshot.manifest_hash,
+      repository: snapshot.manifest.repository,
+      status,
+      blobs: {},
+    };
+    writeFileSync(publicationPath, JSON.stringify(state, null, 2) + '\n');
+    assert.throws(
+      () =>
+        reassessArchive(work.root, work.parent.meta.id, {
+          change_id: approval.change.meta.id,
+          reason: approval.reason,
+          request: publicRemote.request,
+        }),
+      /never-started snapshot/,
+      status,
+    );
+    assert.deepEqual(readFileSync(approval.intentPath), originalIntent);
+    assert.deepEqual(JSON.parse(readFileSync(publicationPath)), state);
+  }
+  // A malformed-but-present receipt must not count as proof that publication never started.
+  writeFileSync(publicationPath, 'null\n');
+  assert.throws(
+    () =>
+      reassessArchive(work.root, work.parent.meta.id, {
+        change_id: approval.change.meta.id,
+        reason: approval.reason,
+        request: publicRemote.request,
+      }),
+    /never-started snapshot/,
+  );
+  rmSync(publicationPath);
+  for (const branch of [
+    `${snapshot.manifest.namespace}/baseline`,
+    `${snapshot.manifest.namespace}/releases/${snapshot.manifest.release}`,
+    `${snapshot.manifest.namespace}/increments/${snapshot.manifest.increment_id}`,
+  ]) {
+    publicRemote.branches.set(branch, 'some-existing-project-history');
+    assert.throws(
+      () =>
+        reassessArchive(work.root, work.parent.meta.id, {
+          change_id: approval.change.meta.id,
+          reason: approval.reason,
+          request: publicRemote.request,
+        }),
+      /never-started snapshot/,
+      branch,
+    );
+    assert.deepEqual(readFileSync(approval.intentPath), originalIntent);
+    publicRemote.branches.delete(branch);
+  }
+  assert.equal(existsSync(join(work.root, '.verythinker/archive-reassessments')), false);
+  assert.equal(
+    publicRemote.calls.every((call) => call.method === 'GET'),
+    true,
+  );
+});
 
 test('reviewed archive reassessment retires stale unpublished intent and preserves its history/report identity', (t) => {
   const work = fixture(t);

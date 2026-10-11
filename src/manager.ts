@@ -32,6 +32,7 @@ import {
   publishArchive,
   archiveStatus,
   acceptedArchiveForWorkflow,
+  assertPrivateArchiveDestination,
 } from './archives.js';
 
 export interface WorkflowInput {
@@ -971,6 +972,10 @@ function finishWorkflowClaimed(
         (existsSync(intentPath)
           ? JSON.parse(readFileSync(intentPath, 'utf8')).snapshot_id
           : undefined);
+      // Check destination setup before binding an immutable snapshot to it.
+      // Injected publishers are offline transaction fixtures, not native publication proof.
+      if (!priorSnapshot && archivePublisher === publishArchive)
+        assertPrivateArchiveDestination(root);
       const snapshot = priorSnapshot
         ? (archiveStatus(root, priorSnapshot) as { snapshot_id: string })
         : prepareArchive(root, id, { disposition: 'accepted' });

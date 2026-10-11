@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "source_commit": "646a4949aded1b1c950418187c30c1690ca58613",
+  "run_id": 38141739950,
+  "url": "https://github.com/VuThach3001/VeryThinker/actions/runs/38141739950",
+  "status": "passed",
+  "checks": ["locked-install", "build", "tests", "package-inventory", "pack", "installed-package-smoke"],
+  "platforms": [
+    {
+      "platform": "windows-latest",
+      "completed_at": "2026-10-11T13:07:14Z",
+      "tests": 185,
+      "passed": 184,
+      "failed": 0,
+      "skipped": 1,
+      "skip_reasons": ["The CI runner has no native host C compiler for the optional recipe comparison."]
+    },
+    {
+      "platform": "ubuntu-latest",
+      "completed_at": "2026-10-11T13:05:42Z",
+      "tests": 185,
+      "passed": 181,
+      "failed": 0,
+      "skipped": 4,
+      "skip_reasons": ["Windows file-lock behavior is inapplicable.", "Three CodeGraph installation checks require their Windows conformance fixture."]
+    }
+  ],
+  "limitations": [
+    "CI uses protocol and engineering fixtures, not account authentication or inference.",
+    "Optional tool and physical hardware access are not established by these jobs.",
+    "The prior Windows run exposed a returned-versus-persisted body mismatch; canonical storage and a regression test were added before this successful run."
+  ]
+}
