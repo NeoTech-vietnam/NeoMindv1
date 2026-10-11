@@ -92,7 +92,7 @@ test('ordinary engineering intent automatically routes to the manager on every n
   }
   for (const prefix of ['.agents', '.claude', '.github']) {
     const skill = read(root, `${prefix}/skills/verythinker-manager/SKILL.md`);
-    assert.match(skill, /^---\nname: verythinker-manager\n/);
+    assert.match(skill, /^---\r?\nname: verythinker-manager\r?\n/);
     assert.match(skill, /description: Manage a user's engineering requirement/);
     assert.doesNotMatch(skill, /disable-model-invocation: true/);
     assert.match(skill, /manager_begin/);
