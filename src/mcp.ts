@@ -73,7 +73,12 @@ import {
   restoreArchive,
   reassessArchive,
 } from './archives.js';
-import { createCornellNote, validateCornellNote, type CornellInput } from './notes.js';
+import {
+  createCornellNote,
+  validateCornellNote,
+  cornellKinds,
+  type CornellInput,
+} from './notes.js';
 import {
   listRecipes,
   resolveRecipe,
@@ -84,6 +89,120 @@ import {
 } from './recipes.js';
 import { managedRun } from './managed.js';
 import { validateEvidenceInputs, type EvidenceInputSnapshot } from './evidence-inputs.js';
+
+const cornellNoteSchema = z
+  .object({
+    topic: z.string().describe('The substantive engineering or learning topic.'),
+    kind: z.enum(cornellKinds),
+    path: z
+      .string()
+      .optional()
+      .describe(
+        'Visible project-relative note path using forward slashes. Explicitly required for task-bound native work; unbound legacy calls retain the core default.',
+      ),
+    owner: z
+      .string()
+      .optional()
+      .describe('Legacy record owner; the native gateway supplies the actual bound role.'),
+    date: z
+      .string()
+      .optional()
+      .describe('Optional note date; the core supplies today when omitted.'),
+    context: z.string(),
+    constraints: z.array(z.string()),
+    cues: z.array(z.string()),
+    main_notes: z
+      .string()
+      .describe(
+        'Source-cited notes labelled [observed], [source-reported], [expected], or [inferred].',
+      ),
+    sources: z.array(
+      z
+        .object({
+          id: z
+            .string()
+            .describe('Citation identity such as S1, referenced as [S1] in the main notes.'),
+          title: z.string(),
+          uri: z
+            .string()
+            .describe('Official source URL, canonical local source path, or record:RECORD_ID.'),
+          retrieved_at: z.string().describe('Actual ISO retrieval timestamp.'),
+          locator: z.string().optional(),
+          record_id: z.string().optional(),
+          sha256: z.string().optional(),
+        })
+        .strict(),
+    ),
+    demonstration: z
+      .object({
+        body: z.string(),
+        expected: z
+          .string()
+          .describe('Expected result stated separately from actual execution evidence.'),
+        command: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Executable and individual arguments, for example ["node", "demo.mjs"]; never a shell-command string.',
+          ),
+        observed: z
+          .string()
+          .optional()
+          .describe('Actual observation only; requires passing current evidence_ids.'),
+        evidence_ids: z.array(z.string()).optional(),
+      })
+      .strict(),
+    failure_cases: z.array(z.string()),
+    practice: z
+      .object({
+        exercise_path: z
+          .string()
+          .describe('Canonical project-relative path of the separate practice exercise.'),
+        exercise: z.string().describe('Substantive exercise artifact content.'),
+        answer_path: z
+          .string()
+          .describe(
+            'Canonical project-relative path of the separate answer artifact; distinct from exercise_path.',
+          ),
+        answer: z.string().describe('Substantive answer artifact content.'),
+        command: z
+          .array(z.string())
+          .optional()
+          .describe('Executable and individual arguments for runnable practice.'),
+        solution_path: z
+          .string()
+          .optional()
+          .describe(
+            'Optional separate user solution path; existing authored solutions are preserved.',
+          ),
+        starter: z
+          .string()
+          .optional()
+          .describe(
+            'Initial solution content used only when solution_path does not already exist.',
+          ),
+      })
+      .strict(),
+    summary: z.string(),
+    requirement_ids: z.array(z.string()).optional(),
+    problem_ids: z.array(z.string()).optional(),
+    root_cause: z
+      .object({
+        reproduction: z.string(),
+        hypotheses: z.array(z.string()),
+        eliminating_evidence: z.string(),
+        conclusion: z.enum(['confirmed', 'unresolved']),
+        cause: z.string(),
+        repair: z.string(),
+        regression: z.string(),
+      })
+      .strict()
+      .optional()
+      .describe(
+        'Required by the core when kind is root-cause; distinguish confirmed diagnosis from unresolved hypotheses.',
+      ),
+  })
+  .strict() satisfies z.ZodType<CornellInput>;
 
 export interface McpBinding {
   invocation_id?: string;
@@ -114,10 +233,7 @@ export function projectRead(
   const target = safePath(root, input.path),
     path = relative(root, target).replaceAll('\\', '/');
   const lower = path.toLowerCase();
-  if (
-    input.path !== path ||
-    privateProjectPath(path)
-  )
+  if (input.path !== path || privateProjectPath(path))
     throw new Error(
       'Private credentials, raw sessions, runtime caches, and noncanonical paths are unavailable through project_read.',
     );
@@ -137,17 +253,13 @@ export function projectRead(
         (receipt.workflow_id && task.meta.data.workflow_id !== receipt.workflow_id)
       )
         continue;
-      const manifest = validateEvidenceInputs(
-        root,
-        data.input_snapshot as EvidenceInputSnapshot,
-        {
-          files: data.file_baseline as Record<string, string>,
-          record_fingerprints: data.record_baseline as Record<string, string>,
-          check_id: typeof data.check_id === 'string' ? data.check_id : undefined,
-          check_fingerprint:
-            typeof data.check_fingerprint === 'string' ? data.check_fingerprint : undefined,
-        },
-      );
+      const manifest = validateEvidenceInputs(root, data.input_snapshot as EvidenceInputSnapshot, {
+        files: data.file_baseline as Record<string, string>,
+        record_fingerprints: data.record_baseline as Record<string, string>,
+        check_id: typeof data.check_id === 'string' ? data.check_id : undefined,
+        check_fingerprint:
+          typeof data.check_fingerprint === 'string' ? data.check_fingerprint : undefined,
+      });
       inputArtifacts.add((data.input_snapshot as EvidenceInputSnapshot).manifest_path);
       for (const [originalPath, artifact] of [
         ...Object.entries(manifest.files),
@@ -909,7 +1021,9 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
       decision: z.enum(['pass', 'fail']),
       findings: z
         .array(z.string())
-        .describe('Unresolved defects only. Use [] for pass; document positive observations in assignment_report.')
+        .describe(
+          'Unresolved defects only. Use [] for pass; document positive observations in assignment_report.',
+        )
         .optional(),
       invocation_id: z.string().optional(),
     },
@@ -935,7 +1049,9 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
       decision: z.enum(['pass', 'fail']),
       findings: z
         .array(z.string())
-        .describe('Unresolved defects only. Use [] for pass; document positive observations in assignment_report.')
+        .describe(
+          'Unresolved defects only. Use [] for pass; document positive observations in assignment_report.',
+        )
         .optional(),
       invocation_id: z.string().optional(),
       generalization_review: z.boolean().optional(),
@@ -1183,8 +1299,8 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
   );
   tool(
     'note_create',
-    'Create visible Cornell documentation and separate practice/answer artifacts with the required demonstration quote.',
-    { note: z.record(z.string(), z.unknown()) },
+    'Create Cornell documentation with one {note: {...}} envelope. Supply note.path for task-bound work and practice.exercise_path/answer_path; commands are argument arrays. Expected results and observed evidence remain separate.',
+    { note: cornellNoteSchema },
     (i) => {
       const receipt = bound();
       assertTaskOutputPaths(root, receipt, [
