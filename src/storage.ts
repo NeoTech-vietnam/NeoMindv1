@@ -16,6 +16,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { threadId } from 'node:worker_threads';
+import { deserialize, serialize as serializeSnapshot } from 'node:v8';
 import { parse, stringify } from 'yaml';
 import {
   linkTypes,
@@ -333,19 +334,70 @@ export function validateMetadata(value: unknown): Metadata {
     throw new Error(`Duplicate links in ${m.id}.`);
   return m;
 }
+// Only parsed content is memoized. Filesystem inventory, bytes, paths, and project
+// configuration remain freshly observed for every call, including nested gates.
+const parsedRecordLimit = 1024;
+const parsedRecordByteLimit = 32 * 1024 * 1024;
+const parsedRecords = new Map<string, { source: Buffer; snapshot: Buffer; bytes: number }>();
+let parsedRecordBytes = 0;
+function dropParsedRecord(key: string): void {
+  const entry = parsedRecords.get(key);
+  if (entry) {
+    parsedRecordBytes -= entry.bytes;
+    parsedRecords.delete(key);
+  }
+}
+function parseRecordBytes(bytes: Buffer, path: string): { meta: Metadata; body: string } {
+  const key = hash(bytes);
+  const cached = parsedRecords.get(key);
+  if (cached && cached.source.equals(bytes)) {
+    try {
+      const result = deserialize(cached.snapshot) as { meta: Metadata; body: string };
+      validateMetadata(result.meta);
+      parsedRecords.delete(key);
+      parsedRecords.set(key, cached);
+      return result;
+    } catch {
+      dropParsedRecord(key);
+    }
+  }
+  const source = bytes.toString('utf8').replace(/\r\n/g, '\n');
+  const match = /^---\n([\s\S]*?)\n---(?:\n|$)([\s\S]*)$/.exec(source);
+  if (!match) throw new Error(`Missing YAML frontmatter: ${path}`);
+  const result = { meta: validateMetadata(parse(match[1]!)), body: match[2]! };
+  let snapshot: Buffer;
+  try {
+    snapshot = serializeSnapshot(result);
+  } catch {
+    // An unsupported snapshot remains a normal uncached parse, never a failure entry.
+    return result;
+  }
+  const weight = bytes.byteLength + snapshot.byteLength + key.length;
+  if (weight <= parsedRecordByteLimit) {
+    dropParsedRecord(key);
+    while (
+      parsedRecords.size >= parsedRecordLimit ||
+      parsedRecordBytes + weight > parsedRecordByteLimit
+    ) {
+      const oldest = parsedRecords.keys().next().value;
+      if (oldest === undefined) break;
+      dropParsedRecord(oldest);
+    }
+    parsedRecords.set(key, { source: bytes, snapshot, bytes: weight });
+    parsedRecordBytes += weight;
+  }
+  return result;
+}
 export function loadRecords(root: string): ProjectRecord[] {
   readConfig(root);
   const seen = new Set<string>();
   return filesUnder(root, '.verythinker/records')
     .filter((p) => p.endsWith('.md'))
     .map((path) => {
-      const source = readFileSync(safePath(root, path), 'utf8').replace(/\r\n/g, '\n');
-      const match = /^---\n([\s\S]*?)\n---(?:\n|$)([\s\S]*)$/.exec(source);
-      if (!match) throw new Error(`Missing YAML frontmatter: ${path}`);
-      const meta = validateMetadata(parse(match[1]!));
+      const { meta, body } = parseRecordBytes(readFileSync(safePath(root, path)), path);
       if (seen.has(meta.id)) throw new Error(`Duplicate record ID: ${meta.id}`);
       seen.add(meta.id);
-      return { meta, body: match[2]!, path: path.replaceAll('\\', '/') };
+      return { meta, body, path: path.replaceAll('\\', '/') };
     });
 }
 export function getRecord(root: string, id: string): ProjectRecord {
