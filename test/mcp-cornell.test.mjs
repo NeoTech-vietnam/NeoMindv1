@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -126,6 +126,7 @@ test('typed Cornell envelope creates valid artifacts and rejects malformed neste
     /exercise_path|answer_path/,
   );
   assert.equal(loadRecords(root).length, before);
+  assert.equal(existsSync(join(root, 'docs')), false);
   const wrongCommand = noteInput();
   wrongCommand.demonstration.command = 'node demo.mjs';
   const refusedCommand = await client.callTool({
@@ -135,6 +136,20 @@ test('typed Cornell envelope creates valid artifacts and rejects malformed neste
   assert.equal(refusedCommand.isError, true);
   assert.match(refusedCommand.content.map((item) => item.text ?? '').join('\n'), /command|array/);
   assert.equal(loadRecords(root).length, before);
+  assert.equal(existsSync(join(root, 'docs')), false);
+  const unprovenObservation = noteInput();
+  unprovenObservation.demonstration.observed = 'The actual runtime returned the expected number.';
+  const refusedObservation = await client.callTool({
+    name: 'note_create',
+    arguments: { note: unprovenObservation },
+  });
+  assert.equal(refusedObservation.isError, true);
+  assert.match(
+    refusedObservation.content.map((item) => item.text ?? '').join('\n'),
+    /requires evidence/,
+  );
+  assert.equal(loadRecords(root).length, before);
+  assert.equal(existsSync(join(root, 'docs')), false);
   mkdirSync(join(root, 'docs/practice'), { recursive: true });
   const authored = '// My own solution must remain intact.\n';
   writeFileSync(join(root, 'docs/practice/my-answer.mjs'), authored);
