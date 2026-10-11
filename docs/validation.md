@@ -1,6 +1,6 @@
 # Local validation of 0.1.0-alpha.2
 
-Observed on **2026-10-11**, Windows x64, Node.js **24.18.0**, npm **12.0.2**. The package is a local prerelease. Source hashes in the saved evidence identify the tested inputs, including working-tree changes at verification time. No npm publication or remote CI success is claimed.
+Observed on **2026-10-11**, Windows x64, Node.js **24.18.0**, npm **12.0.2**. The package is a local prerelease. Source hashes in the saved evidence identify the tested inputs, including working-tree changes at verification time. No npm publication is claimed. Remote Windows and Ubuntu checks also passed at commit `aebdb5cb39910ca617800834bc66424c973e58eb`; see the recorded run below.
 
 ## Automated engineering and adapter checks
 
@@ -22,7 +22,9 @@ Review identities in automated fixtures establish gate behavior; they do not mea
 
 `npm run package:smoke` builds a tarball and installs it into a fresh temporary project. It checks resource resolution, generation for all three platforms, preservation of existing instructions, an actual check, evidence archive, fixture review/acceptance, interrupted and new-process resumption, index rebuild, user-edit preservation, and MCP discovery/invocation from the installed package. The alpha.2 procedure additionally invokes all five manager operations through the installed stdio MCP server, checks specialist decision fixtures, required documentation, handoff, missing-review rejection, closure/report idempotency, and persisted resumption. The resulting smoke report records the observed result and exact artifact hash.
 
-The local deliverable is `artifacts/verythinker-0.1.0-alpha.2.tgz`. The smoke report in `artifacts/package-smoke.json` records its SHA-256 and verification environment. The package excludes generated Python bytecode and object files. CI defines corresponding Windows/Ubuntu checks; Ubuntu and remote execution remain unobserved here.
+The local deliverable is `artifacts/verythinker-0.1.0-alpha.2.tgz`. The smoke report in `artifacts/package-smoke.json` records its SHA-256 and verification environment. The installed-package smoke passed. The package excludes generated Python bytecode and object files. [CI run 38116332997](https://github.com/VuThach3001/VeryThinker/actions/runs/38116332997) passed tests, packaging, and installed-package lifecycle/MCP checks on both Windows and Ubuntu at the recorded commit. An earlier Windows run exposed a CRLF-sensitive test assertion; that assertion was corrected before this successful run.
+
+NeoLearning was upgraded from alpha.1 to alpha.2. The upgrade installed six new managed resources and updated 59 managed resources with **zero conflicts**. Project instructions and unrelated dirty work were preserved. `doctor` reported the three adapters configured, the manager and automatic draft PR policy enabled, and no warnings. Native discovery/routing/MCP/hook capabilities remain unverified; a configured adapter is not an observed native session.
 
 ## Pilot and optional-provider measurements
 
@@ -37,5 +39,11 @@ The local deliverable is `artifacts/verythinker-0.1.0-alpha.2.tgz`. The smoke re
 **Seventeen planned trials remain unrecorded.** Native skill discovery, effective model routing, configured MCP and lifecycle hook invocation still need client conformance. The execution policy was not disabled or bypassed. This environmental failure does not establish the model's engineering ability or compare routing efficiency.
 
 Automated draft-PR tests use mock GitHub transactions, including concurrent publication, retry recovery and privacy. Those tests alone do not establish a live upstream submission or human approval. Physical hardware/HIL, board ratings, thermal/EMC/timing, power-loss durability, formal ASPICE assessment, authenticated client conformance and npm publication are outside the demonstrated evidence. These boundaries remain [stable release criteria](release.md).
+
+## Observed draft PR delivery
+
+[Implementation PR #1](https://github.com/VuThach3001/VeryThinker/pull/1) contains the engineering package and autonomous native manager. [Knowledge PR #2](https://github.com/VuThach3001/VeryThinker/pull/2) was created through the actual contribution publisher after a separate agent reviewed the generalized lesson, applicability, limitations, privacy, and finalized provenance. It contains only the versioned pack manifest and lesson. Retrying the publisher returned the same branch and PR; neither proposal was merged.
+
+The shared repository is private. These PRs and the lesson's immutable implementation source require repository access. The lesson records that restriction and does not claim anonymous source accessibility. This live publisher check establishes authenticated draft creation and persisted retry recovery, not autonomous native-client execution or human merge approval.
 
 [CAMEL research](camel-research.md) records the inspected source snapshot and coordination mechanisms adopted independently. No CAMEL Python runtime, source, or prompts are bundled. Native clients remain responsible for actual delegation; deterministic manager tests prove core policy/gate behavior rather than model decision quality.
