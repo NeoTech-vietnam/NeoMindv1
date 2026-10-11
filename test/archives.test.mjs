@@ -335,10 +335,15 @@ test('archive policy is absent for legacy projects and preserves a stable namesp
   const original = readArchivePolicy(work.root);
   renameSync(work.root, `${work.root}-renamed`);
   assert.equal(ensureArchivePolicy(`${work.root}-renamed`).namespace, original.namespace);
+  assert.equal(ensureArchivePolicy(`${work.root}-renamed`).repository, original.repository);
   const fresh = join(`${work.root}-renamed`, 'legacy');
   mkdirSync(fresh);
   initialize(fresh, { project_id: 'LEGACY' });
   assert.equal(readArchivePolicy(fresh), null);
+  assert.equal(
+    ensureArchivePolicy(fresh).repository,
+    'VuThach3001/VeryThinker-Project-Archives',
+  );
 });
 test('accepted snapshot preserves record bytes, binary files, and evidence when restored', (t) => {
   const work = fixture(t);

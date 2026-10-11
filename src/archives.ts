@@ -184,7 +184,7 @@ export function ensureArchivePolicy(root: string): ArchivePolicy {
     const policy: ArchivePolicy = {
       schema_version: 1,
       enabled: true,
-      repository: 'VuThach3001/VeryThinker',
+      repository: 'VuThach3001/VeryThinker-Project-Archives',
       namespace: branchName(`codex/projects/${slug}-${config.project_id.toLowerCase()}`),
       project_id: config.project_id,
       baseline_commit: null,
