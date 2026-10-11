@@ -672,6 +672,12 @@ class NativeSession {
       })
       .join('')
       .slice(0, 32000);
+    const authoringGuidance =
+      this.receipt.role === 'developer'
+        ? ' For ordinary assigned source or documentation edits, use project_read to obtain the current SHA-256, then task_file_write with complete UTF-8 content and that expected_hash; null is only for a missing file. Reuse the same operation UUID and payload for lost-response recovery. Cornell artifacts use note_create and its draft revision envelope. These core operations preserve reviewed scope and acceptance artifacts; native permission requests remain separate blockers.'
+        : this.receipt.role === 'check-executor'
+          ? ' For a reviewed inspection_items rubric, read the current plan through record_get with explicit data_fields and include_body:false. Inspect every exact item, obtain file SHA-256 values through project_read or full record fingerprints through record_get, then submit actual observations and limitations through check_inspect. Report fail/gap when the expected criterion is not demonstrated. This records model-performed inspection, not automatic semantic proof; independent review and actual executable checks remain distinct.'
+          : '';
     const params = {
       model: this.receipt.requested_model,
       cwd: this.root,
@@ -687,7 +693,7 @@ class NativeSession {
           ),
         },
       },
-      developerInstructions: `VeryThinker native invocation ${this.receipt.id}; role ${this.receipt.role}; workflow ${this.receipt.workflow_id ?? 'unassigned'}; task ${this.receipt.task_id ?? 'unassigned'}. Use the invocation-bound VeryThinker MCP operations. Work only within your role and task contract. Do not invoke manager_run recursively. The manager has already created the workflow. Every durable change and review must reference this invocation. Before ending your assignment, call assignment_report with substantive Objective, Inputs and Sources, Decisions and Rationale, Results, Evidence, Limitations, and Lessons sections. A producer's task_submit with the full seven-section work_record satisfies this reporting requirement instead. Reviewers report after their actual review; check executors report after executing checks and inspecting the result. For a follow-up report, explicitly list any covered prior invocation IDs of your own role and assignment. Do not fabricate another agent's narrative. Native authorization belongs to the existing client policy. The installed role and workflow instructions are included below; use MCP record and recipe operations to inspect engineering state rather than shell commands just to reload these instructions.${instructions}`,
+      developerInstructions: `VeryThinker native invocation ${this.receipt.id}; role ${this.receipt.role}; workflow ${this.receipt.workflow_id ?? 'unassigned'}; task ${this.receipt.task_id ?? 'unassigned'}. Use the invocation-bound VeryThinker MCP operations. Work only within your role and task contract. Do not invoke manager_run recursively. The manager has already created the workflow. Every durable change and review must reference this invocation. Before ending your assignment, call assignment_report with substantive Objective, Inputs and Sources, Decisions and Rationale, Results, Evidence, Limitations, and Lessons sections. A producer's task_submit with the full seven-section work_record satisfies this reporting requirement instead. Reviewers report after their actual review; check executors report after executing checks and inspecting the result. For a follow-up report, explicitly list any covered prior invocation IDs of your own role and assignment. Do not fabricate another agent's narrative. Native authorization belongs to the existing client policy.${authoringGuidance} The installed role and workflow instructions are included below; use MCP record and recipe operations to inspect engineering state rather than shell commands just to reload these instructions.${instructions}`,
     };
     let ack: any;
     this.update({

@@ -310,6 +310,7 @@ test('planning author metadata preserves execution identity and cannot forge rep
     'attempts',
     'escalation_required',
     'submission',
+    'workspace_writes',
     'status',
   ])
     assert.throws(
@@ -506,7 +507,12 @@ test('reviewer can inspect validated captured inputs for its task without readin
     /outside the assigned verified evidence scope/,
   );
   assert.throws(
-    () => projectRead(root, { path: manifest.files['src/public-alias.txt'].blob_path }, { ...scope, task_id: null }),
+    () =>
+      projectRead(
+        root,
+        { path: manifest.files['src/public-alias.txt'].blob_path },
+        { ...scope, task_id: null },
+      ),
     /outside the assigned verified evidence scope/,
   );
   const other = captureEvidenceInputs(root, {

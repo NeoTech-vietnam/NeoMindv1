@@ -543,6 +543,8 @@ function collectFiles(
       'baseline_paths',
       'protected_paths',
       'protected_acceptance_paths',
+      'verification_artifact_paths',
+      'oracle_paths',
       'acceptance_paths',
       'output_paths',
       ...(record.meta.type === 'task' ? ['allowed_paths'] : []),
@@ -632,6 +634,8 @@ function collectFiles(
       'acceptance_paths',
       'output_paths',
       'protected_acceptance_paths',
+      'verification_artifact_paths',
+      'oracle_paths',
     ])
       for (const path of strings(data[field])) {
         approved.add(path);

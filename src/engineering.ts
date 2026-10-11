@@ -22,6 +22,7 @@ import { listPacks } from './packs.js';
 import { assertRouting, readInvocation, readRoutingPolicy, routingProblems } from './routing.js';
 import { noteFreshnessProblems } from './notes.js';
 import { verifyFrozenRecipe } from './recipes.js';
+import { workspaceHistoryProblems, workspaceResumeOperations } from './workspace.js';
 import { toolLockProblems } from './tools.js';
 import {
   captureEvidenceInputs,
@@ -465,9 +466,10 @@ function evidenceProblems(
 ): string[] {
   const d = evidence.meta.data;
   const errors: string[] = [];
+  let capturedInputs: ReturnType<typeof validateEvidenceInputs> | undefined;
   if (d.input_snapshot) {
     try {
-      validateEvidenceInputs(root, d.input_snapshot as EvidenceInputSnapshot, {
+      capturedInputs = validateEvidenceInputs(root, d.input_snapshot as EvidenceInputSnapshot, {
         files: d.file_baseline as Record<string, string>,
         record_fingerprints: d.record_baseline as Record<string, string>,
         check_id: check.meta.id,
@@ -561,6 +563,7 @@ function evidenceProblems(
         receipt.result !== d.result ||
         receipt.log_hash !== d.log_hash ||
         receipt.execution_invocation_id !== d.execution_invocation_id ||
+        JSON.stringify(receipt.inspection ?? null) !== JSON.stringify(d.inspection ?? null) ||
         JSON.stringify(receipt.input_snapshot) !== JSON.stringify(d.input_snapshot) ||
         JSON.stringify(receipt.record_baseline) !== JSON.stringify(d.record_baseline) ||
         JSON.stringify(receipt.file_baseline) !== JSON.stringify(d.file_baseline)
@@ -568,6 +571,34 @@ function evidenceProblems(
         errors.push('Evidence does not match the collected execution receipt.');
     } catch {
       errors.push('Execution receipt is unreadable.');
+    }
+  }
+  if (d.inspection && typeof d.inspection === 'object') {
+    try {
+      const inspected = d.inspection as { observations: InspectionInput['observations'] };
+      for (const observation of inspected.observations)
+        for (const source of observation.sources) {
+          if (
+            source.kind === 'file' &&
+            (capturedInputs?.files[source.path] ?? capturedInputs?.context_files[source.path])
+              ?.hash !== source.sha256
+          )
+            errors.push(
+              `Inspection source differs from its immutable captured input: ${source.path}`,
+            );
+          if (
+            source.kind === 'file' &&
+            hash(readFileSync(safePath(root, source.path))) !== source.sha256
+          )
+            errors.push(`Inspection source changed: ${source.path}`);
+          if (source.kind === 'record') {
+            const current = records.find((record) => record.meta.id === source.record_id);
+            if (!current || recordFingerprint(current) !== source.fingerprint)
+              errors.push(`Inspection source changed: ${source.record_id}`);
+          }
+        }
+    } catch {
+      errors.push('Inspection observations or sources are malformed or unavailable.');
     }
   }
   return errors;
@@ -632,6 +663,7 @@ function reviewBaseline(root: string, target: ProjectRecord, records = loadRecor
     const protectedPaths = [
       ...strings(target.meta.data.protected_acceptance_paths),
       ...strings(target.meta.data.oracle_paths),
+      ...strings(target.meta.data.verification_artifact_paths),
     ];
     if (protectedPaths.length) baseline.protected_files = snapshotPaths(root, protectedPaths);
   }
@@ -854,6 +886,7 @@ export function verify(
       );
     for (const problem of noteFreshnessProblems(root, task)) add('knowledge-freshness', problem);
     for (const problem of verifyFrozenRecipe(root, task)) add('protected-recipe', problem);
+    for (const problem of workspaceHistoryProblems(root, task)) add('workspace-history', problem);
     const reqs = requirementsFor(task);
     if (!reqs.length) add('missing-requirements', 'Task must link at least one requirement.');
     if (!strings(task.meta.data.acceptance_criteria).length)
@@ -981,14 +1014,32 @@ export function verify(
   }
   return { ok: findings.length === 0, gate, findings, checked_at: now() };
 }
-function assertDispatchReadiness(root: string, task: ProjectRecord): void {
+function assertDispatchReadiness(
+  root: string,
+  task: ProjectRecord,
+  recoveryInvocationId?: string,
+): void {
   if (readRoutingPolicy(root) && !strictRecord(root, task))
     throw new Error(
       'Pending legacy work requires alpha.3 migration and Sol reassessment before dispatch.',
     );
   const report = verify(root, task.meta.id, strictExecution(root, task) ? 'design-ready' : 'ready');
+  const recovered = recoveryInvocationId
+    ? workspaceResumeOperations(root, task, recoveryInvocationId)
+    : [];
   // A blocked lifecycle can be resumed only after every substantive gate is current.
-  const failures = report.findings.filter((finding) => finding.code !== 'blocked');
+  const failures = report.findings.filter(
+    (finding) =>
+      finding.code !== 'blocked' &&
+      !(
+        finding.code === 'workspace-history' &&
+        recovered.some(
+          (id) =>
+            finding.message ===
+            `File-write operation ${id} is incomplete; recover the same payload before verification.`,
+        )
+      ),
+  );
   if (failures.length) throw new Error(failures.map((finding) => finding.message).join('\n'));
 }
 export function startTask(
@@ -997,6 +1048,16 @@ export function startTask(
   requestedModel?: string,
   confirmedModel?: string,
   invocationId: string = randomUUID(),
+): ProjectRecord {
+  return startTaskWithRecovery(root, id, requestedModel, confirmedModel, invocationId);
+}
+function startTaskWithRecovery(
+  root: string,
+  id: string,
+  requestedModel: string | undefined,
+  confirmedModel: string | undefined,
+  invocationId: string,
+  recoverInterruptedWrites = false,
 ): ProjectRecord {
   if (typeof invocationId !== 'string' || !invocationId.trim())
     throw new Error('Task execution needs a non-empty invocation identity.');
@@ -1015,7 +1076,7 @@ export function startTask(
     throw new Error(
       'Repeated failure requires an explicit coordinator-selected model before restarting.',
     );
-  assertDispatchReadiness(root, task);
+  assertDispatchReadiness(root, task, recoverInterruptedWrites ? invocationId : undefined);
   const config = readConfig(root);
   if (
     loadRecords(root).filter((r) => r.meta.type === 'task' && r.meta.status === 'in-progress')
@@ -1063,7 +1124,7 @@ export function startTask(
           .length >= readConfig(root).max_workers
       )
         throw new Error('Concurrent worker limit reached.');
-      assertDispatchReadiness(root, current);
+      assertDispatchReadiness(root, current, recoverInterruptedWrites ? invocationId : undefined);
     },
   );
 }
@@ -1092,7 +1153,7 @@ export function resumeTask(
     confirmedModel = receipt!.confirmed_model ?? undefined;
   }
   if (task.meta.status === 'in-progress') {
-    if (strictExecution(root, task)) assertDispatchReadiness(root, task);
+    if (strictExecution(root, task)) assertDispatchReadiness(root, task, invocationId);
     if (invocationId === undefined || invocationId === task.meta.data.invocation_id) return task;
     return updateRecord(
       root,
@@ -1118,7 +1179,7 @@ export function resumeTask(
       (current) => {
         if (current.meta.revision !== task.meta.revision || current.meta.status !== 'in-progress')
           throw new Error('Task changed before its invocation handoff could be recorded.');
-        if (strictExecution(root, current)) assertDispatchReadiness(root, current);
+        if (strictExecution(root, current)) assertDispatchReadiness(root, current, invocationId);
       },
     );
   }
@@ -1128,12 +1189,13 @@ export function resumeTask(
     throw new Error(
       'Repeated failure requires an explicit coordinator-selected model before resuming.',
     );
-  return startTask(
+  return startTaskWithRecovery(
     root,
     id,
     requestedModel ?? (task.meta.data.requested_model as string | undefined),
     confirmedModel,
-    invocationId,
+    invocationId ?? randomUUID(),
+    true,
   );
 }
 export function requestRepair(root: string, id: string, feedback: string): ProjectRecord {
@@ -1342,11 +1404,202 @@ export function reviewRecord(
     body: `# Scope\n${id}\n\n# Decision\n${decision}\n\n# Findings\n${findings.length ? findings.join('\n') : 'No open findings reported.'}\n`,
   });
 }
+export type InspectionSource =
+  | { kind: 'file'; path: string; sha256: string; locator?: string }
+  | { kind: 'record'; record_id: string; fingerprint: string; locator?: string };
+export interface InspectionInput {
+  observations: {
+    item_id: string;
+    outcome: 'pass' | 'fail' | 'gap';
+    observation: string;
+    sources: InspectionSource[];
+  }[];
+  limitations: string[];
+}
+
+function checkedInspection(
+  root: string,
+  check: ProjectRecord,
+  task: ProjectRecord,
+  records: ProjectRecord[],
+  scope: string[],
+  files: Record<string, string>,
+  input: InspectionInput,
+): { observations: object[]; records: ProjectRecord[]; files: string[]; limitations: string[] } {
+  const items = check.meta.data.inspection_items;
+  if (
+    !String(check.meta.data.method ?? '').includes('inspection') ||
+    strings(check.meta.data.command).length ||
+    !Array.isArray(items) ||
+    !items.length ||
+    items.length > 64
+  )
+    throw new Error(
+      'Inspection requires a reviewed inspection method and item rubric, without an executable command.',
+    );
+  const rubric = new Map<string, Record<string, unknown>>();
+  for (const item of items) {
+    if (
+      !item ||
+      typeof item !== 'object' ||
+      typeof item.id !== 'string' ||
+      !item.id.trim() ||
+      rubric.has(item.id) ||
+      typeof item.criterion !== 'string' ||
+      !item.criterion.trim() ||
+      typeof item.expected !== 'string' ||
+      !item.expected.trim()
+    )
+      throw new Error(
+        'Inspection rubric needs unique IDs, criteria and authoritative expected outcomes.',
+      );
+    rubric.set(item.id, item);
+  }
+  if (
+    !input ||
+    !Array.isArray(input.observations) ||
+    input.observations.length !== rubric.size ||
+    !Array.isArray(input.limitations) ||
+    !input.limitations.length ||
+    input.limitations.length > 32 ||
+    input.limitations.some(
+      (text) => typeof text !== 'string' || !text.trim() || text.length > 16000,
+    )
+  )
+    throw new Error('Inspection needs every reviewed item and explicit limitations.');
+  const applicableCheckIds = new Set(
+    records
+      .filter(
+        (record) =>
+          record.meta.type === 'check' &&
+          record.meta.links.some((link) => link.type === 'verifies' && scope.includes(link.target)),
+      )
+      .map((record) => record.meta.id),
+  );
+  const allowed = records.filter(
+    (record) =>
+      scope.includes(record.meta.id) ||
+      record.meta.id === check.meta.id ||
+      record.meta.data.task_id === task.meta.id ||
+      (record.meta.type === 'review' &&
+        record.meta.links.some(
+          (link) =>
+            link.type === 'reviews' &&
+            (scope.includes(link.target) || applicableCheckIds.has(link.target)),
+        )) ||
+      (record.meta.data.workflow_id === task.meta.data.workflow_id &&
+        record.meta.links.some(
+          (link) =>
+            ['verifies', 'documents', 'reviews', 'references'].includes(link.type) &&
+            (scope.includes(link.target) || link.target === check.meta.id),
+        )),
+  );
+  const byId = new Map(allowed.map((record) => [record.meta.id, record]));
+  const allowedFiles = new Set(Object.keys(files));
+  for (const record of allowed) {
+    for (const field of [
+      'verification_artifact_paths',
+      'oracle_paths',
+      'protected_acceptance_paths',
+    ])
+      for (const path of strings(record.meta.data[field]))
+        allowedFiles.add(path);
+    for (const field of ['artifact_path', 'log_path', 'receipt_path'])
+      if (typeof record.meta.data[field] === 'string')
+        allowedFiles.add(record.meta.data[field] as string);
+    for (const field of ['artifact_hashes', 'file_baseline'])
+      if (record.meta.data[field] && typeof record.meta.data[field] === 'object')
+        for (const path of Object.keys(record.meta.data[field] as object)) allowedFiles.add(path);
+  }
+  const seen = new Set<string>(),
+    sourceRecords = new Map<string, ProjectRecord>(),
+    sourceFiles = new Set<string>();
+  const observations = input.observations.map((observation) => {
+    const item = rubric.get(observation?.item_id);
+    if (
+      !item ||
+      seen.has(observation.item_id) ||
+      !['pass', 'fail', 'gap'].includes(observation.outcome) ||
+      typeof observation.observation !== 'string' ||
+      observation.observation.trim().length < 20 ||
+      observation.observation.length > 16000 ||
+      !Array.isArray(observation.sources) ||
+      !observation.sources.length ||
+      observation.sources.length > 16
+    )
+      throw new Error(
+        'Inspection observations need exact unique reviewed IDs, outcomes, substantive observations and bounded sources.',
+      );
+    seen.add(observation.item_id);
+    for (const source of observation.sources) {
+      if (
+        !source ||
+        (source.locator !== undefined &&
+          (typeof source.locator !== 'string' || source.locator.length > 2000))
+      )
+        throw new Error('Inspection source locator is invalid.');
+      if (source.kind === 'file') {
+        if (
+          !allowedFiles.has(source.path) ||
+          !/^[a-f0-9]{64}$/.test(source.sha256) ||
+          hash(readFileSync(safePath(root, source.path))) !== source.sha256
+        )
+          throw new Error(
+            `Inspection file source is outside the verification inputs or changed: ${source.path}`,
+          );
+        sourceFiles.add(source.path);
+      } else if (source.kind === 'record') {
+        const record = byId.get(source.record_id);
+        if (!record || source.fingerprint !== recordFingerprint(record))
+          throw new Error(
+            `Inspection record source is outside the task scope or changed: ${source.record_id}`,
+          );
+        sourceRecords.set(record.meta.id, record);
+      } else
+        throw new Error('Inspection source must identify a current file or engineering record.');
+    }
+    return {
+      item_id: item.id,
+      criterion: item.criterion,
+      expected: item.expected,
+      outcome: observation.outcome,
+      observation: observation.observation.trim(),
+      sources: observation.sources.map((source) => ({ ...source })),
+    };
+  });
+  return {
+    observations,
+    records: [...sourceRecords.values()],
+    files: [...sourceFiles],
+    limitations: [...input.limitations],
+  };
+}
+
 export function runCheck(
   root: string,
   id: string,
   taskId: string,
   invocationId?: string,
+): ProjectRecord {
+  return collectVerification(root, id, taskId, invocationId);
+}
+export function inspectCheck(
+  root: string,
+  id: string,
+  taskId: string,
+  input: InspectionInput,
+  invocationId?: string,
+): ProjectRecord {
+  if (!input || !Array.isArray(input.observations))
+    throw new Error('Inspection collection requires an observation payload.');
+  return collectVerification(root, id, taskId, invocationId, input);
+}
+function collectVerification(
+  root: string,
+  id: string,
+  taskId: string,
+  invocationId?: string,
+  inspection?: InspectionInput,
 ): ProjectRecord {
   const check = getRecord(root, id);
   const task = getRecord(root, taskId);
@@ -1354,10 +1607,14 @@ export function runCheck(
     throw new Error('Provide a check and a task.');
   if (strictExecution(root, task)) {
     if (!readRoutingPolicy(root)) throw new Error('Strict routing policy is missing.');
-    assertRouting(root, 'check-executor', invocationId, {
+    const executor = assertRouting(root, 'check-executor', invocationId, {
       ...invocationBinding(task),
       require_completed: false,
     });
+    if (inspection && executor?.state !== 'running')
+      throw new Error('Inspection collection requires a currently running native check executor.');
+    if (inspection && !executor?.native_tool_scope.includes('check_inspect'))
+      throw new Error('The native check executor did not confirm the check_inspect capability.');
     const errors = [
       ...authoredRoutingProblems(
         root,
@@ -1375,7 +1632,7 @@ export function runCheck(
   if (!check.meta.links.some((l) => l.type === 'verifies' && scope.includes(l.target)))
     throw new Error('Check does not verify this task or its requirements/design.');
   const command = strings(check.meta.data.command);
-  if (!command.length)
+  if (!inspection && !command.length)
     throw new Error('Check command must be a non-empty executable/argument array.');
   const baselinePaths = strings(check.meta.data.baseline_paths);
   if (!baselinePaths.length)
@@ -1388,6 +1645,11 @@ export function runCheck(
       return [id, recordFingerprint(r)];
     }),
   );
+  const inspected = inspection
+    ? checkedInspection(root, check, task, records, scope, file_baseline, inspection)
+    : undefined;
+  for (const source of inspected?.records ?? [])
+    record_baseline[source.meta.id] = recordFingerprint(source);
   const run = randomUUID();
   const timeout = Number(check.meta.data.timeout_ms ?? 60000);
   if (!Number.isFinite(timeout) || timeout < 1 || timeout > 600000)
@@ -1401,12 +1663,32 @@ export function runCheck(
   const input_snapshot = captureEvidenceInputs(root, {
     files: file_baseline,
     records: records.filter(
-      (record) => scope.includes(record.meta.id) || record.meta.id === check.meta.id,
+      (record) =>
+        scope.includes(record.meta.id) ||
+        record.meta.id === check.meta.id ||
+        inspected?.records.some((source) => source.meta.id === record.meta.id),
     ),
     record_fingerprints: { ...record_baseline, [check.meta.id]: recordFingerprint(check) },
     invocation_id: invocationId,
-    additional_files: strings(task.meta.data.protected_acceptance_paths),
+    additional_files: [
+      ...strings(task.meta.data.protected_acceptance_paths),
+      ...strings(check.meta.data.verification_artifact_paths),
+      ...(inspected?.files ?? []),
+    ],
   });
+  if (inspection) {
+    const captured = validateEvidenceInputs(root, input_snapshot);
+    for (const observation of inspection.observations)
+      for (const source of observation.sources)
+        if (
+          source.kind === 'file' &&
+          (captured.files[source.path] ?? captured.context_files[source.path])?.hash !==
+            source.sha256
+        )
+          throw new Error(
+            `Inspection source differs from its immutable captured input: ${source.path}`,
+          );
+  }
   appendEvent(root, run, {
     event: 'check-start',
     check_id: id,
@@ -1416,17 +1698,27 @@ export function runCheck(
     confirmed_model: task.meta.data.confirmed_model ?? null,
   });
   const started = Date.now();
-  const executed = spawnSync(command[0]!, command.slice(1), {
-    cwd: root,
-    shell: false,
-    encoding: 'utf8',
-    timeout,
-    maxBuffer: 10 * 1024 * 1024,
-    windowsHide: true,
-  });
+  const executed = inspected
+    ? null
+    : spawnSync(command[0]!, command.slice(1), {
+        cwd: root,
+        shell: false,
+        encoding: 'utf8',
+        timeout,
+        maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
+      });
   const expected = Number(check.meta.data.expected_exit_code ?? 0);
-  const result = executed.status === expected && !executed.error ? 'pass' : 'fail';
-  const log = `Command: ${JSON.stringify(command)}\nExit code: ${executed.status}\nSignal: ${executed.signal}\nError: ${executed.error?.message ?? 'none'}\n\nSTDOUT\n${executed.stdout ?? ''}\nSTDERR\n${executed.stderr ?? ''}`;
+  const result = inspected
+    ? inspection!.observations.every((item) => item.outcome === 'pass')
+      ? 'pass'
+      : 'fail'
+    : executed!.status === expected && !executed!.error
+      ? 'pass'
+      : 'fail';
+  const log = inspected
+    ? `Inspection observations submitted by ${invocationId ?? 'legacy observer'}; semantic correctness requires independent review.\n${JSON.stringify(inspected, (_key, value) => (_key === 'records' || _key === 'files' ? undefined : value), 2)}\n`
+    : `Command: ${JSON.stringify(command)}\nExit code: ${executed!.status}\nSignal: ${executed!.signal}\nError: ${executed!.error?.message ?? 'none'}\n\nSTDOUT\n${executed!.stdout ?? ''}\nSTDERR\n${executed!.stderr ?? ''}`;
   const log_path = `.verythinker/runs/${run}/output.log`;
   const receipt_path = `.verythinker/runs/${run}/receipt.json`;
   const git = spawnSync('git', ['rev-parse', 'HEAD'], {
@@ -1457,11 +1749,21 @@ export function runCheck(
     },
     tool_versions: { runner_node: process.version, declared: check.meta.data.tool_versions ?? {} },
     result,
-    exit_code: executed.status,
+    exit_code: executed?.status ?? null,
     duration_ms: Date.now() - started,
     method: check.meta.data.method ?? 'test',
     environment: check.meta.data.environment ?? { os: process.platform, node: process.version },
     command,
+    ...(inspected
+      ? {
+          inspection: {
+            observations: inspected.observations,
+            limitations: inspected.limitations,
+            claim_kind: 'agent-observed-inspection',
+            independent_semantic_review_required: true,
+          },
+        }
+      : {}),
     at: now(),
     log_path,
     log_hash: hash(log),
@@ -1484,7 +1786,7 @@ export function runCheck(
       { type: 'documents', target: taskId },
     ],
     data: { ...receipt, receipt_path },
-    body: `# Results\n${result}; exit code ${executed.status}.\n\n# Evidence\n[Execution log](../../${log_path})\n\n# Limitations\nEvidence applies to the recorded inputs, method, and environment.\n`,
+    body: `# Results\n${result}; ${inspected ? 'recorded inspection observations' : `exit code ${executed!.status}`}.\n\n# Evidence\n[Execution log](../../${log_path})\n\n# Limitations\nEvidence applies to the recorded inputs, method, and environment.${inspected ? '\nInspection observations are agent judgements; independent semantic review remains required.\n' + inspected.limitations.join('\n') : ''}\n`,
   });
 }
 export function archiveEvidence(root: string, id: string): ProjectRecord {

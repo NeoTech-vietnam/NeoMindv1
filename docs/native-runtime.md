@@ -30,6 +30,10 @@ Generated recipe contracts remain drafts until their actual role adopts them. Th
 
 Captured verification input manifests and content-addressed blobs are readable only through validated references within the assigned workflow or task. A reviewer can inspect the source bytes used by an earlier failing check without receiving access to other increments' private input stores.
 
+The authenticated Windows demonstration encountered a host-specific legacy elevated sandbox refresh failure: runtime ACL validation could not open an existing `cua_node/node_repl.exe` executable because of Windows file-sharing error 32. The pinned command runner and setup helper were installed, and model inference worked. No pending native request was approved, no user process was stopped, and no global sandbox setting was changed. Existing scoped MCP operations provide a permitted recovery path, but this does not prove generic native shell or file-edit compatibility on this host. The [sanitized runtime diagnosis](validation/native-alpha3-windows-runtime.json) separates observed failures, pinned-source findings, and unresolved limits.
+
+The Developer also receives [scoped implementation edits](workspace.md) through `task_file_write`. Its current native receipt must confirm that operation. The Core checks assigned paths, current reviewed plans, protected artifacts, and a fresh expected file hash, preserving previous bytes and completion history. This provides a bounded editing operation without granting a pending native permission request.
+
 ## Compatibility and verification limits
 
 Projects initialized through the older core API retain legacy behavior when `.verythinker/routing.json` is absent. Alpha.3 installation and migration add the approved routing policy. Authored model-policy changes are preserved as a migration conflict rather than silently rewritten. Historical accepted records remain historical evidence; new managed work requires native routing receipts.

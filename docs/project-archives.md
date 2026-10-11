@@ -4,7 +4,7 @@ An archive preserves project engineering history in a confirmed private upstream
 
 ## Identity and releases
 
-The installer creates project-owned `.verythinker/archive.json`. Legacy projects without this policy retain their previous behavior. The initial namespace uses the project directory name and stable project ID; it is persisted and survives directory renaming. The default upstream is `VuThach3001/VeryThinker`. The manager checks current private visibility before preparing a new accepted publication intent, using the read-only destination preflight. Publication checks visibility again before creating blobs. A public, inaccessible, or uninitialized target is a recorded publication blocker.
+The installer creates project-owned `.verythinker/archive.json`. Legacy projects without this policy retain their previous behavior. The initial namespace uses the project directory name and stable project ID; it is persisted and survives directory renaming. New policies use the user-authorized private upstream `VuThach3001/VeryThinker-Project-Archives`; updates preserve existing configured destinations and namespaces. Other repository owners must configure an accessible private destination. The manager checks current private visibility before preparing a new accepted publication intent, using the read-only destination preflight. Publication checks visibility again before creating blobs. A public, inaccessible, or uninitialized target is a recorded publication blocker.
 
 Branches have these forms:
 

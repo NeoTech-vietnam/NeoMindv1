@@ -253,6 +253,8 @@ test('native tool preapproval is scoped to the approved role gateway and preserv
   const gateway = observed.config['mcp_servers.verythinker'];
   assert.ok(gateway.enabled_tools.includes('record_review'));
   assert.ok(!gateway.enabled_tools.includes('record_update'));
+  assert.ok(!gateway.enabled_tools.includes('task_file_write'));
+  assert.ok(!gateway.enabled_tools.includes('check_inspect'));
   assert.ok(Object.values(gateway.tools).every((tool) => tool.approval_mode === 'approve'));
   const rejected = await bridge('explicit-tool-policy').start(root, {
     role: 'reviewer',
@@ -261,4 +263,34 @@ test('native tool preapproval is scoped to the approved role gateway and preserv
   assert.equal(rejected.state, 'blocked');
   assert.match(rejected.error, /Authored VeryThinker tool approval policy/);
   assert.equal(rejected.native_turn_id, null);
+});
+
+test('native scoped editing capability is exposed only to a new Developer invocation', async (t) => {
+  const root = project(t),
+    native = bridge('approval-scope');
+  const started = await native.start(root, {
+    role: 'developer',
+    prompt: 'Observe task editing scope mechanics only.',
+  });
+  const completed = await native.wait(root, started.id, 5000);
+  assert.equal(completed.state, 'completed');
+  const observed = JSON.parse(completed.output),
+    gateway = observed.config['mcp_servers.verythinker'];
+  assert.equal(observed.approvalPolicy, null);
+  assert.equal(observed.sandbox, null);
+  assert.ok(gateway.enabled_tools.includes('task_file_write'));
+  assert.equal(gateway.tools.task_file_write.approval_mode, 'approve');
+  assert.ok(completed.native_tool_scope.includes('task_file_write'));
+  assert.match(routingProblems(root, 'developer', completed.id).join(' '), /Protocol fixture/);
+  const inspecting = await native.start(root, {
+    role: 'check-executor',
+    prompt: 'Observe only the scoped inspection gateway mechanics.',
+  });
+  const inspected = await native.wait(root, inspecting.id, 5000);
+  assert.equal(inspected.state, 'completed');
+  const inspectionGateway = JSON.parse(inspected.output).config['mcp_servers.verythinker'];
+  assert.ok(inspectionGateway.enabled_tools.includes('check_inspect'));
+  assert.ok(!inspectionGateway.enabled_tools.includes('task_file_write'));
+  assert.equal(inspectionGateway.tools.check_inspect.approval_mode, 'approve');
+  assert.ok(inspected.native_tool_scope.includes('check_inspect'));
 });

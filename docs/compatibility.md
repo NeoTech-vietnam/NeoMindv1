@@ -1,12 +1,12 @@
 # Native client compatibility
 
-VeryThinker installs project-local adapters. Generated files are checked by automated tests; discovery and execution in authenticated native sessions remain **unverified** until a recorded conformance run confirms them. Finding an executable or a configuration file does not establish native behavior or model availability.
+VeryThinker installs project-local adapters. Generated files are checked by automated tests. Authenticated Codex App Server `0.162.1` observations confirm Sol and Luna selection and completed inference; [validation reports](validation.md) separately record engineering completion. Native skill-picker discovery and hook trust remain unverified. Finding an executable or a configuration file does not establish native behavior or model availability.
 
 ## Supported installation targets
 
 | Target                      | Generated integration                                                                          | Verification status                                                                                             |
 | --------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Codex local CLI/desktop/IDE | Instructions/skills/roles, project MCP/hooks, project-local App Server `0.162.1`               | Strict alpha.3 model receipts implemented; authenticated model access and client discovery require actual runs  |
+| Codex local CLI/desktop/IDE | Instructions/skills/roles, project MCP/hooks, project-local App Server `0.162.1`               | Sol/Luna selection and inference observed on the pinned App Server; picker/hook discovery remains unverified     |
 | Claude Code local           | `CLAUDE.md`, `.claude/skills`, `.claude/agents/*.md`, portable MCP and hooks                   | Resource generation remains available; strict Sol/Luna/Terra execution is restricted pending verified selection |
 | GitHub Copilot in VS Code   | Repository instructions, `.github/skills`, `.github/agents/*.agent.md`, portable MCP and hooks | Resource generation remains available; strict exact-model execution is restricted pending verified selection    |
 | Remote/cloud clients        | Local adapters may contain machine-specific absolute paths                                     | Restricted; install on the execution host and record a separate conformance run                                 |
@@ -30,6 +30,8 @@ Alpha.3 installed Codex projects use exact routing policy: Sol for manager/requi
 Historical alpha.2 records keep their requested/agent-reported observations and are never upgraded into native receipts. Directly initialized legacy fixtures remain useful for testing core record mechanics; generated adapters and an installed routing policy activate strict execution. Native schema fixtures include the pinned `0.153.4` response for regression and the `0.162.1` runtime conformance surface.
 
 Hooks are advisory: disabling or rejecting them does not bypass CLI verification. MCP configuration alone does not grant trust or prove that a tool was invoked.
+
+The authenticated Windows run encountered a host-specific sandbox refresh failure on a locked inherited Node REPL executable. Scoped VeryThinker MCP operations still generated files and ran checks. This establishes neither universal Windows failure nor generic native editing compatibility; the [runtime observations](validation/native-alpha3-windows-runtime.json) preserve the exact limitation.
 
 ## Installation and updates
 

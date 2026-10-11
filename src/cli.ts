@@ -19,6 +19,8 @@ import {
   reviewTask,
   reviewRecord,
   runCheck,
+  inspectCheck,
+  type InspectionInput,
   startTask,
   resumeTask,
   requestRepair,
@@ -53,6 +55,7 @@ import {
 } from './archives.js';
 import { dispatchKnowledgeCommand } from './knowledge-cli.js';
 import { managedRun, type ManagedRunInput } from './managed.js';
+import { workspaceWrite } from './workspace.js';
 import { recordTypes, type Gate, type Platform, type Profile, type RecordType } from './types.js';
 
 const help = `VeryThinker engineering workflow (Node.js 24+)
@@ -71,6 +74,7 @@ Usage: verythinker <command> [action] [id] [options]
   task resume ID [--model MODEL] | task repair ID --summary FEEDBACK
   review ID --owner reviewer --decision pass|fail [--findings JSON] [--invocation ID]
   check run ID --task TASK_ID
+  check inspect ID --task TASK_ID --invocation ID --data JSON
   check archive EVIDENCE_ID (preserve verification logs for review and sharing)
   context TASK_ID [--max-chars NUMBER]
   trace ID [--impact] | verify [TASK_ID] [--gate ready|design-ready|verified|accepted]
@@ -84,6 +88,7 @@ Usage: verythinker <command> [action] [id] [options]
   note create --data JSON | note revise ID --data JSON | note validate ID
   recipe list|resolve ID|prepare --data JSON|run ID|revise ID --data JSON
   capability describe ROLE|resolve --data JSON|invoke --data JSON
+  workspace write --data JSON (actual Developer invocation and reviewed task scope required)
   codegraph enable --report FILE --executable FILE --args JSON
 Options: --project DIRECTORY --json --help --version
 
@@ -401,14 +406,26 @@ async function main(): Promise<void> {
     }
     case 'check':
       if (action === 'archive') result = archiveEvidence(root, needed(id, 'Evidence ID'));
-      else if (action === 'run')
+      else if (action === 'inspect') {
+        const input = data();
+        result = inspectCheck(
+          root,
+          needed(id, 'Check ID'),
+          needed(o.task, '--task'),
+          { observations: input.observations, limitations: input.limitations } as InspectionInput,
+          needed(o.invocation ?? input.invocation_id, '--invocation'),
+        );
+      } else if (action === 'run')
         result = runCheck(
           root,
           needed(id, 'Check ID'),
           needed(o.task, '--task'),
           o.invocation as string | undefined,
         );
-      else throw new Error('Use check run CHECK_ID --task TASK_ID or check archive EVIDENCE_ID.');
+      else
+        throw new Error(
+          'Use check run|inspect CHECK_ID --task TASK_ID or check archive EVIDENCE_ID.',
+        );
       break;
     case 'context':
       result = contextPacket(
@@ -506,6 +523,30 @@ async function main(): Promise<void> {
         result = invocation;
         if (invocation.state === 'waiting-native-permission') await shutdownNative();
       } else throw new Error('Use native run|status|wait|interrupt|resume.');
+      break;
+    }
+    case 'workspace': {
+      if (action !== 'write') throw new Error('Use workspace write --data JSON.');
+      const input = data();
+      if (typeof input.content !== 'string') throw new Error('workspace content must be a string.');
+      if (
+        !Object.hasOwn(input, 'expected_hash') ||
+        (input.expected_hash !== null && typeof input.expected_hash !== 'string')
+      )
+        throw new Error(
+          'workspace expected_hash must be a SHA-256 string, or null for a new file.',
+        );
+      result = workspaceWrite(root, {
+        task_id: needed(input.task_id, 'workspace task_id'),
+        workflow_id: needed(input.workflow_id, 'workspace workflow_id'),
+        invocation_id: needed(input.invocation_id ?? o.invocation, 'workspace invocation_id'),
+        path: needed(input.path, 'workspace path'),
+        content: input.content,
+        expected_hash: input.expected_hash,
+        ...(input.operation_id !== undefined
+          ? { operation_id: needed(input.operation_id, 'workspace operation_id') }
+          : {}),
+      });
       break;
     }
     case 'archive':

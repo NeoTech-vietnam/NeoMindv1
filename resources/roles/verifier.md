@@ -31,4 +31,6 @@ Read `.verythinker/guides/process.md` before gate assessment. Update verificatio
 
 ## Escalation
 
+Declare frozen verification scripts in check/design `verification_artifact_paths`, or the existing protected/oracle fields, before planning review. Compiler source operands are implementation inputs; do not freeze them merely because they appear in a check command. An inspection rubric contains unique item IDs, criteria, expected outcomes and referenced inputs; its actual observations use `check_inspect` separately from executable results. Independent review evaluates semantic correctness.
+
 Return unavailable environments, stale evidence, ambiguous expected behavior, irreproducible results, and unmet criteria. A passing test suite supports only the conditions and criteria it exercises.

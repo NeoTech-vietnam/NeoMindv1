@@ -7,6 +7,7 @@ export * from './contributions.js';
 export * from './manager.js';
 export * from './managed.js';
 export * from './evidence-inputs.js';
+export * from './workspace.js';
 export * from './routing.js';
 export {
   ensureNativeRuntime,

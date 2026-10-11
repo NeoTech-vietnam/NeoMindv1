@@ -67,6 +67,8 @@ Versioned recipes cover Cornell evidence notes, scalar configuration persistence
 
 Role contracts declare required tools, approved optional providers, and allowed core operations. The gateway installs applicable pinned CodeGraph, Context7, and Playwright providers into an isolated cache with integrity locks. Native restrictions are generated where supported; doctor distinguishes observed availability, configured capability, enforced restrictions, and instruction-only limits. A native permission refusal or required missing tool remains a persisted blocker.
 
+The Developer's [scoped file-edit operation](workspace.md) provides ordinary UTF-8 implementation changes through the same core. It requires current task ownership, native capability confirmation, reviewed scope, and an expected file hash; protected acceptance artifacts and Cornell ownership remain separate. Exact previous bytes and immutable completion history remain task-linked archive inputs. Interrupted partial writes block gates until an authorized unchanged operation is recovered.
+
 ## Failure and evidence boundaries
 
 Interrupted sessions resume by task ID, current records, working tree, and evidence. A worker submits outputs; a separate reviewer invocation assesses them. The core evaluates applicable gates and reports missing or stale evidence. Tests demonstrate their actual environments; embedded simulation results do not establish board-level behavior.

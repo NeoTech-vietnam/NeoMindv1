@@ -21,6 +21,8 @@ import {
   reviewTask,
   reviewRecord,
   runCheck,
+  inspectCheck,
+  recordFingerprint,
   startTask,
   resumeTask,
   requestRepair,
@@ -89,6 +91,7 @@ import {
   type RecipeInput,
 } from './recipes.js';
 import { managedRun } from './managed.js';
+import { workspaceWrite } from './workspace.js';
 import { validateEvidenceInputs, type EvidenceInputSnapshot } from './evidence-inputs.js';
 
 const cornellNoteSchema = z
@@ -278,8 +281,13 @@ export function projectRead(
   if (receipt?.task_id) {
     const scope = recordScope(root, receipt),
       task = getRecord(root, receipt.task_id),
-      permitted = new Set<string>(inputArtifacts);
+      permitted = new Set<string>(inputArtifacts),
+      exactReferences = new Set<string>();
     const addPaths = (data: Record<string, unknown>) => {
+      for (const key of ['verification_artifact_paths', 'oracle_paths'])
+        if (Array.isArray(data[key]))
+          for (const reference of data[key] as unknown[])
+            if (typeof reference === 'string') exactReferences.add(reference);
       for (const key of [
         'allowed_paths',
         'baseline_paths',
@@ -314,6 +322,7 @@ export function projectRead(
           for (const file of Object.keys(record.meta.data[key] as object)) permitted.add(file);
     }
     if (
+      !exactReferences.has(path) &&
       ![...permitted].some(
         (prefix) => path === prefix || path.startsWith(prefix.replace(/\/$/, '') + '/'),
       )
@@ -515,6 +524,7 @@ const executionFields = new Set([
   'escalation_feedback_sha256',
   'work_record_id',
   'documentation_snapshot',
+  'workspace_writes',
 ]);
 export function taskAuthorData(
   receipt: NativeReceipt | null,
@@ -754,8 +764,41 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
       );
     },
   );
-  tool('record_get', 'Read one engineering record.', { id: z.string() }, (i) =>
-    scopedRecord(root, bound(), i.id),
+  tool(
+    'record_get',
+    'Read one scoped engineering record and its full current fingerprint. Select data_fields and include_body:false for bounded current-state inspection; omitted options preserve the complete record.',
+    {
+      id: z.string(),
+      data_fields: z.array(z.string().min(1).max(256)).max(64).optional(),
+      include_body: z.boolean().optional(),
+    },
+    (i) => {
+      const record = scopedRecord(root, bound(), i.id);
+      return {
+        meta: {
+          ...record.meta,
+          data:
+            i.data_fields === undefined
+              ? record.meta.data
+              : Object.fromEntries(
+                  i.data_fields
+                    .filter((key: string) => Object.hasOwn(record.meta.data, key))
+                    .map((key: string) => [key, record.meta.data[key]]),
+                ),
+        },
+        path: record.path,
+        ...(i.include_body !== false ? { body: record.body } : {}),
+        fingerprint: recordFingerprint(record),
+        ...(i.data_fields !== undefined || i.include_body !== undefined
+          ? {
+              projection: {
+                data_fields: i.data_fields ?? null,
+                include_body: i.include_body !== false,
+              },
+            }
+          : {}),
+      };
+    },
   );
   tool(
     'record_create',
@@ -938,6 +981,42 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
     false,
   );
   tool(
+    'task_file_write',
+    'Create or replace an assigned UTF-8 implementation/documentation file using its current SHA-256 (null for a new file). Requires the running native Developer producer, reviewed task scope, and unchanged protected acceptance artifacts. Records immutable previous bytes and idempotent operation history; Cornell artifacts use note_create instead.',
+    {
+      task_id: z.string(),
+      workflow_id: z.string().optional(),
+      path: z.string().describe('Project-relative file inside the reviewed task allowed_paths.'),
+      content: z.string().describe('Complete UTF-8 replacement content, at most 128 KiB.'),
+      expected_hash: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .nullable()
+        .describe(
+          'Current file SHA-256 from project_read, or null only when creating a missing file.',
+        ),
+      operation_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe(
+          'Reuse this UUID and identical payload to recover an interrupted or lost-response write.',
+        ),
+    },
+    (i) => {
+      const receipt = bound();
+      if (!receipt)
+        throw new Error('Task file writes require an invocation-bound native Developer session.');
+      scopedRecord(root, receipt, i.task_id);
+      return workspaceWrite(root, {
+        ...i,
+        workflow_id: i.workflow_id ?? receipt.workflow_id ?? '',
+        invocation_id: receipt.id,
+      });
+    },
+    false,
+  );
+  tool(
     'task_submit',
     'Persist worker submission and standard work history.',
     { id: z.string(), summary: z.string(), work_record: z.string().optional() },
@@ -1004,6 +1083,71 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
     'Execute the project-defined verification command and collect real baseline-bound evidence.',
     { id: z.string(), task: z.string() },
     (i) => runCheck(root, i.id, i.task, bound()?.id),
+    false,
+  );
+  tool(
+    'check_inspect',
+    'Record actual observations for every item in a reviewed inspection plan. Sources must match current project file SHA-256 values or record fingerprints; gaps and failures remain failing evidence. This captures model-performed inspection with limits, independently reviewed later; it does not run an executable or establish automatic semantic proof.',
+    {
+      id: z.string(),
+      task: z.string(),
+      observations: z
+        .array(
+          z
+            .object({
+              item_id: z.string(),
+              outcome: z.enum(['pass', 'fail', 'gap']),
+              observation: z.string().min(24).max(8000),
+              sources: z
+                .array(
+                  z.discriminatedUnion('kind', [
+                    z
+                      .object({
+                        kind: z.literal('file'),
+                        path: z.string(),
+                        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+                        locator: z.string().optional(),
+                      })
+                      .strict(),
+                    z
+                      .object({
+                        kind: z.literal('record'),
+                        record_id: z.string(),
+                        fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+                        locator: z.string().optional(),
+                      })
+                      .strict(),
+                  ]),
+                )
+                .min(1)
+                .max(16),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(64),
+      limitations: z.array(z.string().min(8).max(2000)).min(1).max(32),
+    },
+    (i) => {
+      const receipt = bound();
+      if (!receipt)
+        throw new Error(
+          'Inspection evidence requires an invocation-bound native Check Executor session.',
+        );
+      scopedRecord(root, receipt, i.task);
+      for (const item of i.observations)
+        for (const source of item.sources) {
+          if (source.kind === 'record') scopedRecord(root, receipt, source.record_id);
+          else projectRead(root, { path: source.path, max_chars: 128 }, receipt);
+        }
+      return inspectCheck(
+        root,
+        i.id,
+        i.task,
+        { observations: i.observations, limitations: i.limitations },
+        receipt.id,
+      );
+    },
     false,
   );
   tool(

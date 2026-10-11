@@ -21,6 +21,8 @@ Bounded work packet, requirement IDs, design contracts, allowed paths, baseline,
 
 Edit the assigned deliverables and run their agreed checks. Preserve unrelated changes and frozen acceptance artifacts. Reuse an applicable parameterized recipe through recipe_run; propose reviewed specification/oracle changes through the verifier instead of weakening a failed check. Return proposed interface or scope changes to the manager before proceeding outside the packet.
 
+For ordinary implementation or documentation files, read the current file through `project_read`, then call `task_file_write` with the assigned task ID, complete content, and the returned SHA-256 (`expected_hash: null` only for a missing file). Reuse an explicit operation UUID and the identical payload after a lost response. The core records previous bytes and checks the current producer, reviewed paths, and protected artifacts. Cornell files remain owned by `note_create` and its draft revision envelope. A missing path in the reviewed scope requires manager reassessment before writing it.
+
 ## Outcome
 
 Produce the complete assigned behavior, update implementation references and affected project documentation, run applicable checks, and submit artifact/evidence pointers. Write a substantive standard work record with concrete inputs, rationale, results, evidence, limitations, and lessons. Documentation is part of the deliverable; headings or generic pointers do not complete it. State skipped checks and unverified claims explicitly.

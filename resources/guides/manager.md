@@ -88,4 +88,8 @@ For strict work, resume through `native_resume`, which creates a fresh signed re
 
 ## Tool reference for agents
 
+Read bounded current state with `record_get` using explicit `data_fields` and `include_body: false`; it returns the full record fingerprint and labels the projection. Load historical fields or the body when their provenance matters to the decision.
+
+Assign ordinary source/documentation edits to the current Developer producer through `task_file_write`; use `note_create` for Cornell-owned files. Each write requires the observed file hash and reviewed task paths. A check executor inspects or executes checks; source repair stays with the producer. Tool availability is observed for the invocation that actually receives and uses it.
+
 Prefer MCP manager/core operations. For an unavailable MCP transport, use the CLI internally: `workflow begin --requirement TEXT`, `workflow discuss WORKFLOW_ID --data JSON`, `workflow decide WORKFLOW_ID --data JSON`, `workflow status [WORKFLOW_ID]`, and `workflow finish WORKFLOW_ID --data JSON`. Use `task submit TASK_ID --work-record FILE` to submit the complete work-record body from a saved file. Consult `verythinker --help` for remaining arguments and schemas. A CLI `review` operation stores a real separate invocation's result; assigning a new identity string is not independent review.

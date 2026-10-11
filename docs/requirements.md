@@ -36,4 +36,6 @@ This baseline covers the approved engineering plan, autonomous-manager extension
 
 Implementation artifacts are represented by task `allowed_paths`/`outputs`, optional `implements` design links, and evidence file baselines; a separate implementation record type is not introduced. Owner-approved exceptions are reviewed changes to the requirement baseline followed by ordinary design and evidence reassessment. They do not waive missing execution evidence.
 
+Scoped Developer editing completes VT-REQ-009 and VT-REQ-028: ordinary implementation files require a confirmed native capability, current producer and reviewed scope, protected-artifact checks, and an expected hash. Previous bytes and completion receipts remain immutable archive inputs. A fresh native resume may recover an unchanged interrupted operation only through signed producer lineage; incomplete or altered history blocks acceptance. `src/workspace.ts` and its core/MCP/native regressions implement this boundary.
+
 Automated review fixtures test gate mechanics. They do not establish the quality of a human or model review, physical hardware behavior, remote CI success, npm publication, or a formal ASPICE assessment.
