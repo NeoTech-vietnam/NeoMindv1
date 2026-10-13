@@ -807,12 +807,17 @@ class NativeSession {
       throw new Error(
         'Authored VeryThinker disabled_tools conflicts with this role; preserve the restriction and review configuration.',
       );
-    const instructionPaths = [
-      `roles/${this.receipt.role}.md`,
-      'guides/workflow.md',
-      ...(this.receipt.role === 'manager' ? ['guides/manager.md'] : []),
-      ...(this.receipt.fast_grant ? ['guides/fast-workflow.md'] : []),
-    ];
+    let fastContext = Boolean(this.receipt.fast_grant);
+    if (!fastContext && this.receipt.role === 'reviewer' && this.receipt.workflow_id) {
+      try { fastContext = getRecord(this.root, this.receipt.workflow_id).meta.data.execution_policy === 'fast'; }
+      catch { /* Unresolved or fixture bindings retain their ordinary role instructions. */ }
+    }
+    // A composite planning stage is not the full Standard coordinator. Loading
+    // contradictory delegation/closure instructions wastes turns and cannot
+    // grant those operations. Current core gates and exact routing are unchanged.
+    const instructionPaths = fastContext
+      ? [...(this.receipt.fast_grant?.stage === 'planner' ? [] : [`roles/${this.receipt.role}.md`]), 'guides/fast-workflow.md']
+      : [`roles/${this.receipt.role}.md`, 'guides/workflow.md', ...(this.receipt.role === 'manager' ? ['guides/manager.md'] : [])];
     const instructions = instructionPaths
       .map((path) => {
         const installed = safePath(this.root, `.verythinker/${path}`);
@@ -825,7 +830,7 @@ class NativeSession {
       .slice(0, 32000);
     const authoringGuidance =
       this.receipt.role === 'developer'
-        ? ' For an existing small edit, obtain the SHA-256 through project_read, then prefer task_file_write with replacement:{before,after} matching exactly one literal occurrence. The core preserves every unrelated byte, including newline escapes. Omit content or set it null with replacement. Use full content for whole-file work or new files; null expected_hash is only for a missing file. Reuse the operation UUID and payload for lost-response recovery. Cornell artifacts use note_create. Reviewed scope, protected artifacts and native permissions still apply.'
+        ? ' For an existing small edit, obtain the SHA-256 through project_read, then prefer task_file_write with replacement:{before,after} matching exactly one literal occurrence. The core preserves unrelated bytes, including newline escapes. Omit content or set it null with replacement. Set operation_id:null (or omit it) for each new edit so core allocates a distinct UUID. Reuse a returned operation UUID only for its identical lost-response payload; never reuse an invocation ID across different edits. Full content supports whole-file/new-file work; null expected_hash is only for a missing file. Cornell artifacts use note_create. Reviewed scope, protected artifacts and native permissions still apply.'
         : this.receipt.role === 'check-executor'
           ? ' For a reviewed inspection_items rubric, read the current plan through record_get with explicit data_fields and include_body:false. Inspect every exact item, obtain file SHA-256 values through project_read or full record fingerprints through record_get, then submit actual observations and limitations through check_inspect. Report fail/gap when the expected criterion is not demonstrated. This records model-performed inspection, not automatic semantic proof; independent review and actual executable checks remain distinct.'
           : '';

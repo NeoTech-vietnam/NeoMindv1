@@ -55,7 +55,8 @@ test('workspace MCP discovery declares CAS, task scope and recovery without call
   const replacement = schema.properties.replacement.anyOf?.find(item => item.type === 'object') ?? schema.properties.replacement;
   assert.deepEqual([...replacement.required].sort(), ['after', 'before']);
   assert.equal(replacement.properties.before.minLength, 1);
-  assert.equal(schema.properties.operation_id.format, 'uuid');
+  assert.match(JSON.stringify(schema.properties.operation_id), /uuid/);
+  assert.match(JSON.stringify(schema.properties.operation_id), /null/);
   assert.match(JSON.stringify(schema.properties.expected_hash), /null/);
   assert.equal(schema.properties.invocation_id, undefined);
   assert.equal(schema.properties.confirmed_model, undefined);

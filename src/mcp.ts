@@ -1066,6 +1066,7 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
       operation_id: z
         .string()
         .uuid()
+        .nullable()
         .optional()
         .describe(
           'Reuse this UUID and identical payload to recover an interrupted or lost-response write.',
@@ -1078,6 +1079,7 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
       scopedRecord(root, receipt, i.task_id);
       const common = {
         ...i,
+        operation_id: i.operation_id ?? undefined,
         workflow_id: i.workflow_id ?? receipt.workflow_id ?? '',
         invocation_id: receipt.id,
       };

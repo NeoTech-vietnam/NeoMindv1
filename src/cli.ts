@@ -561,7 +561,7 @@ async function main(): Promise<void> {
         invocation_id: needed(input.invocation_id ?? o.invocation, 'workspace invocation_id'),
         path: needed(input.path, 'workspace path'),
         expected_hash: input.expected_hash,
-        ...(input.operation_id !== undefined
+        ...(input.operation_id != null
           ? { operation_id: needed(input.operation_id, 'workspace operation_id') }
           : {}),
       };

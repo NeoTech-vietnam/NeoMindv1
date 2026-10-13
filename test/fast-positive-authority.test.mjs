@@ -102,7 +102,14 @@ function fixture(t) {
     } } });
     return fingerprint;
   }
-  return { root, workflow, selection, requirement, task, check, signedReceipt, freezePlan };
+  function refreshReceipt(id, patch) {
+    const path = join(root, `.verythinker/native/receipts/${id}.json`);
+    const { signature, ...original } = JSON.parse(readFileSync(path, 'utf8'));
+    const unsigned = { ...original, ...patch };
+    writeFileSync(path, JSON.stringify({ ...unsigned,
+      signature: sign(null, Buffer.from(canonicalJson(unsigned)), privateKey).toString('base64') }));
+  }
+  return { root, workflow, selection, requirement, task, check, signedReceipt, freezePlan, refreshReceipt };
 }
 
 test('synthetic signed planner and producer grants route standard responsibility aliases and bound operations', async (t) => {
@@ -178,6 +185,23 @@ test('Fast signed authority rejects receipt tampering, changed protected/config 
   const stale = h.signedReceipt('planner');
   updateRecord(h.root, h.workflow.meta.id, { data: { execution_policy_selection: { ...h.selection, selection_fingerprint: '0'.repeat(64) } } });
   assert.ok(fastGrantProblems(h.root, stale).some((problem) => /selection/i.test(problem)));
+});
+
+test('Fast authority tolerates only bridge output, timestamp and signature refreshes', (t) => {
+  const f = fixture(t);
+  const planner = f.signedReceipt('planner');
+  f.refreshReceipt(planner.id, { output: 'Native bridge persisted its actual output.', updated_at: new Date(Date.now() + 1000).toISOString() });
+  assert.deepEqual(fastGrantProblems(f.root, planner, { phase: 'planning' }), []);
+  for (const mutation of [
+    { state: 'blocked' },
+    { confirmed_model: 'gpt-5.6-terra' },
+    { permissions: [{ method: 'approval/request', request_id: 'request-1', reason: 'unexpected', at: new Date().toISOString() }] },
+  ]) {
+    const changed = { ...planner, ...mutation };
+    assert.ok(fastGrantProblems(f.root, changed).some((problem) => /signed persisted native receipt/i.test(problem)));
+  }
+  const changedGrant = { ...planner, fast_grant: { ...planner.fast_grant, task_id: 'other-task' } };
+  assert.ok(fastGrantProblems(f.root, changedGrant).some((problem) => /signed persisted native receipt|another invocation/i.test(problem)));
 });
 
 test('rehashed intake edits and a changed frozen plan cannot mint Fast authority', (t) => {

@@ -245,7 +245,11 @@ export function fastGrantProblems(
   if (receipt.execution_mode !== 'native') return [...problems, 'Protocol fixtures cannot establish Fast authority.'];
   try {
     const signed = readInvocation(root, receipt.id);
-    if (canonicalJson(signed) !== canonicalJson(receipt))
+    const mutableBridgeFields = (value: NativeReceipt) => {
+      const { output: _output, updated_at: _updatedAt, signature: _signature, ...identity } = value;
+      return identity;
+    };
+    if (canonicalJson(mutableBridgeFields(signed)) !== canonicalJson(mutableBridgeFields(receipt)))
       problems.push('Fast authority input differs from its signed persisted native receipt.');
   } catch (error) {
     problems.push(`Fast authority receipt cannot be verified: ${error instanceof Error ? error.message : String(error)}.`);
