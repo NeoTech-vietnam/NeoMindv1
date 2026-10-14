@@ -911,7 +911,6 @@ export function createMcpServer(root: string, binding: McpBinding = {}): McpServ
     { id: z.string() },
     (i) => {
       const receipt = bound();
-      if (!receipt) throw new Error('Review status requires an invocation-bound native session.');
       scopedRecord(root, receipt, i.id);
       return reviewStatus(root, i.id);
     },
